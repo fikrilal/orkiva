@@ -104,8 +104,8 @@ Done when:
 
 ## 5) Establish (E) — Database and Migration Baseline
 
-- [ ] Set up `packages/db` with Drizzle config.
-- [ ] Create initial schema for MVP tables:
+- [x] Set up `packages/db` with Drizzle config.
+- [x] Create initial schema for MVP tables:
   - `threads`
   - `thread_participants`
   - `messages`
@@ -114,13 +114,13 @@ Done when:
   - `trigger_jobs`
   - `trigger_attempts`
   - `audit_events`
-- [ ] Add migration generation and apply scripts.
-- [ ] Add `infra/docker-compose.yml` for Postgres 16.
-- [ ] Add DB readiness probe and migration bootstrap command.
-- [ ] Add minimal DB integration test for migration + connectivity.
+- [x] Add migration generation and apply scripts.
+- [x] Add `infra/docker-compose.yml` for Postgres 16.
+- [x] Add DB readiness probe and migration bootstrap command.
+- [x] Add minimal DB integration test for migration + connectivity.
 
 Done when:
-- Fresh environment can boot Postgres, run migrations, and pass DB smoke test from CI/local.
+- [x] Fresh environment can boot Postgres, run migrations, and pass DB smoke test from CI/local.
 
 ## 6) Foundation Exit Criteria
 
@@ -128,8 +128,8 @@ Done when:
 - [x] Repo skeleton compiles and tests cleanly.
 - [x] Strict quality gates and CI baseline are active.
 - [x] Runtime env schema is validated at startup.
-- [ ] DB schema + migrations are executable from clean checkout.
-- [ ] All docs updated for any deviation from proposal defaults.
+- [x] DB schema + migrations are executable from clean checkout.
+- [x] All docs updated for any deviation from proposal defaults.
 
 ## 7) Risks to Watch Early
 
@@ -141,10 +141,10 @@ Done when:
 
 ## 8) Immediate Next Action (Do This First)
 
-- [ ] Implement **Establish (E)** next:
-  - Drizzle + migration pipeline
-  - Postgres compose baseline
-  - DB smoke test and bootstrap command
+- [ ] Start next foundation track after Phase 1 completion:
+  - expand `packages/db` domain-oriented repository APIs
+  - implement core Thread/Message domain services (Epic 1)
+  - wire first MCP endpoints (Epic 2)
 
 Reason:
-- Config contract is complete; DB baseline is the remaining foundation blocker.
+- Foundation bootstrap phase is complete; core product implementation can begin.

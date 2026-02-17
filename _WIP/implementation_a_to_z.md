@@ -20,19 +20,19 @@ Detailed task breakdowns will be created later per workstream.
 
 ## A-Z High-Level Todo
 
-- [ ] **A — Align** acceptance criteria across PRD, protocol, and backlog.
+- [x] **A — Align** acceptance criteria across PRD, protocol, and backlog.
 Done when: one merged MVP acceptance checklist exists and conflicts are removed.
 
-- [ ] **B — Bootstrap** repository structure (`apps/`, `packages/`, `infra/`) and workspace config.
+- [x] **B — Bootstrap** repository structure (`apps/`, `packages/`, `infra/`) and workspace config.
 Done when: monorepo builds and runs baseline scripts without feature code.
 
-- [ ] **C — Configure** quality gates (strict TypeScript, lint, format, test harness, CI skeleton).
+- [x] **C — Configure** quality gates (strict TypeScript, lint, format, test harness, CI skeleton).
 Done when: local `verify` pipeline fails on violations and passes on clean baseline.
 
-- [ ] **D — Define** runtime configuration and environment contract.
+- [x] **D — Define** runtime configuration and environment contract.
 Done when: validated env schema exists for API, worker, auth, db, and observability.
 
-- [ ] **E — Establish** Postgres schema and migration pipeline.
+- [x] **E — Establish** Postgres schema and migration pipeline.
 Done when: core tables (`threads`, `messages`, `cursors`, `sessions`, `trigger_*`, `audit`) are migrated and tested.
 
 - [ ] **F — Form** domain model and state-transition rules.
@@ -100,7 +100,7 @@ Done when: go-live checklist is signed off with known risks, rollback plan, and 
 
 ## Critical Path (Start Here)
 
-- [ ] 1. Complete **A, B, C, D, E** first (platform foundation).
+- [x] 1. Complete **A, B, C, D, E** first (platform foundation).
 - [ ] 2. Then complete **F, G, H, I, J, K, L, M** (core product surface).
 - [ ] 3. Then complete **N, O, P, Q, R, S, U** (runtime orchestration reliability).
 - [ ] 4. Finish with **T, V, W, X, Y, Z** (operations, validation, launch readiness).
