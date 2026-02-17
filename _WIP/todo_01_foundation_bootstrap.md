@@ -41,7 +41,7 @@ Done when:
 
 ## 2) Bootstrap (B) — Monorepo Skeleton
 
-- [ ] Create root structure:
+- [x] Create root structure:
   - `apps/bridge-api`
   - `apps/supervisor-worker`
   - `apps/operator-cli` (skeleton only)
@@ -52,23 +52,23 @@ Done when:
   - `packages/observability`
   - `packages/shared`
   - `infra`
-- [ ] Add root workspace files:
+- [x] Add root workspace files:
   - `package.json`
   - `pnpm-workspace.yaml`
   - `tsconfig.base.json`
   - `.gitignore`
   - `.editorconfig`
   - `.npmrc` (if needed)
-- [ ] Add minimal app entrypoints:
+- [x] Add minimal app entrypoints:
   - `apps/bridge-api/src/main.ts`
   - `apps/supervisor-worker/src/main.ts`
   - `apps/operator-cli/src/main.ts`
-- [ ] Add root scripts for build/dev/test/verify placeholders.
+- [x] Add root scripts for build/dev/test/verify placeholders.
 
 Done when:
-- `pnpm install`
-- `pnpm -r build`
-- `pnpm -r test`
+- [x] `pnpm install`
+- [x] `pnpm -r build`
+- [x] `pnpm -r test`
 run successfully on baseline skeleton.
 
 ## 3) Configure (C) — Quality Gates and CI Baseline
@@ -124,8 +124,8 @@ Done when:
 
 ## 6) Foundation Exit Criteria
 
-- [ ] MVP acceptance checklist exists.
-- [ ] Repo skeleton compiles and tests cleanly.
+- [x] MVP acceptance checklist exists.
+- [x] Repo skeleton compiles and tests cleanly.
 - [ ] Strict quality gates and CI baseline are active.
 - [ ] Runtime env schema is validated at startup.
 - [ ] DB schema + migrations are executable from clean checkout.
@@ -141,10 +141,10 @@ Done when:
 
 ## 8) Immediate Next Action (Do This First)
 
-- [ ] Implement **Bootstrap (B)** first in code:
-  - scaffold workspace and package boundaries
-  - add minimal runnable entrypoints
-  - add root scripts
+- [ ] Implement **Configure (C)** next:
+  - strict TypeScript/lint/format/test quality gates
+  - `verify` pipeline hardening
+  - CI workflow skeleton
 
 Reason:
-- It unlocks all other workstreams and gives a stable base for C/D/E.
+- Bootstrap is complete; quality gates are needed before deeper implementation.
