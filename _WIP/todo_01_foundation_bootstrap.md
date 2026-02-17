@@ -73,18 +73,18 @@ run successfully on baseline skeleton.
 
 ## 3) Configure (C) — Quality Gates and CI Baseline
 
-- [ ] Configure TypeScript strict mode globally.
-- [ ] Configure ESLint + Prettier with repo-wide standards.
-- [ ] Configure Vitest baseline and test file conventions.
-- [ ] Add `verify` script chaining:
+- [x] Configure TypeScript strict mode globally.
+- [x] Configure ESLint + Prettier with repo-wide standards.
+- [x] Configure Vitest baseline and test file conventions.
+- [x] Add `verify` script chaining:
   - lint
   - typecheck
   - test
-- [ ] Add CI workflow skeleton that runs verify on PR.
-- [ ] Ensure failures are deterministic and useful.
+- [x] Add CI workflow skeleton that runs verify on PR.
+- [x] Ensure failures are deterministic and useful.
 
 Done when:
-- A deliberate lint/type/test failure is caught by local verify and CI.
+- [x] A deliberate lint/type/test failure is caught by local verify and CI.
 
 ## 4) Define (D) — Runtime Config Contract
 
@@ -126,7 +126,7 @@ Done when:
 
 - [x] MVP acceptance checklist exists.
 - [x] Repo skeleton compiles and tests cleanly.
-- [ ] Strict quality gates and CI baseline are active.
+- [x] Strict quality gates and CI baseline are active.
 - [ ] Runtime env schema is validated at startup.
 - [ ] DB schema + migrations are executable from clean checkout.
 - [ ] All docs updated for any deviation from proposal defaults.
@@ -141,10 +141,10 @@ Done when:
 
 ## 8) Immediate Next Action (Do This First)
 
-- [ ] Implement **Configure (C)** next:
-  - strict TypeScript/lint/format/test quality gates
-  - `verify` pipeline hardening
-  - CI workflow skeleton
+- [ ] Implement **Define (D)** next:
+  - environment schema contract
+  - startup-time config validation
+  - `.env.example` baseline for API/worker/db/auth/observability/trigger policy
 
 Reason:
-- Bootstrap is complete; quality gates are needed before deeper implementation.
+- Quality gates are complete; config contract is needed before DB and feature modules.
