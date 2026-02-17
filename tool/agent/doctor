@@ -1,0 +1,99 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+usage() {
+  cat >&2 <<'EOF'
+Usage:
+  tool/agent/doctor
+
+Preflight check for WSL -> Windows development wrappers.
+Checks required tooling for Orkiva development:
+- WSL environment + /mnt/<drive>/ repo location
+- cmd.exe + wslpath interoperability
+- Windows git/node/pnpm availability via wrapper
+- Node major version 22.x
+- Optional docker availability and engine reachability
+EOF
+}
+
+if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
+  usage
+  exit 0
+fi
+
+die() {
+  echo "ERROR: $*" >&2
+  exit 1
+}
+
+warn() {
+  echo "WARN: $*" >&2
+}
+
+ok() {
+  echo "OK: $*"
+}
+
+is_wsl() {
+  if [[ -n "${WSL_INTEROP:-}" || -n "${WSL_DISTRO_NAME:-}" ]]; then
+    return 0
+  fi
+  if [[ -r /proc/version ]] && grep -qi "microsoft" /proc/version 2>/dev/null; then
+    return 0
+  fi
+  return 1
+}
+
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+repo_root="$(git -C "$script_dir" rev-parse --show-toplevel 2>/dev/null || true)"
+if [[ -z "$repo_root" ]]; then
+  repo_root="$(cd "$script_dir/../.." && pwd)"
+fi
+
+if ! is_wsl; then
+  die "This doctor is intended to run in WSL."
+fi
+
+case "$repo_root" in
+  /mnt/[a-zA-Z]/*) ;;
+  *)
+    die "Repo must live under /mnt/<drive>/... for Windows tool interop. Detected: $repo_root"
+    ;;
+esac
+
+command -v cmd.exe >/dev/null 2>&1 || die "cmd.exe not found in PATH."
+command -v wslpath >/dev/null 2>&1 || die "wslpath not found in PATH."
+
+winrun="$script_dir/winrun"
+[[ -x "$winrun" ]] || die "Missing executable wrapper: $winrun"
+
+git_ver="$("$script_dir/gitw" --no-stdin --version 2>/dev/null | tr -d '\r' || true)"
+[[ -n "$git_ver" ]] || die "Windows git not found via tool/agent/gitw."
+ok "$git_ver"
+
+node_ver="$("$script_dir/nodew" --no-stdin --version 2>/dev/null | tr -d '\r' || true)"
+[[ -n "$node_ver" ]] || die "Windows node not found via tool/agent/nodew."
+if [[ "$node_ver" =~ ^v([0-9]+)\. ]]; then
+  node_major="${BASH_REMATCH[1]}"
+else
+  die "Unexpected node version output: $node_ver"
+fi
+[[ "$node_major" == "22" ]] || die "Windows node major must be 22.x (detected $node_ver)."
+ok "Windows Node: $node_ver"
+
+pnpm_ver="$("$script_dir/pnpmw" --no-stdin --version 2>/dev/null | tr -d '\r' || true)"
+[[ -n "$pnpm_ver" ]] || die "Windows pnpm not found via tool/agent/pnpmw."
+ok "Windows pnpm: $pnpm_ver"
+
+docker_ver="$("$script_dir/dockw" --no-stdin --version 2>/dev/null | tr -d '\r' || true)"
+if [[ -n "$docker_ver" ]]; then
+  ok "$docker_ver"
+  if ! "$script_dir/dockw" --no-stdin info >/dev/null 2>&1; then
+    warn "Docker CLI found, but engine is not reachable. Start Docker Desktop when needed."
+  fi
+else
+  warn "Docker not found via tool/agent/dockw. Required only for local containerized services."
+fi
+
+echo
+echo "Agent Windows wrapper toolchain is ready."

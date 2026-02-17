@@ -1,0 +1,30 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+usage() {
+  cat >&2 <<'EOF'
+Usage:
+  tool/agent/dockw [--no-stdin] [docker-args...]
+
+Runs Windows docker from WSL via cmd.exe.
+EOF
+}
+
+no_stdin=0
+if [[ "${1:-}" == "--no-stdin" ]]; then
+  no_stdin=1
+  shift
+fi
+
+if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
+  usage
+  exit 0
+fi
+
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+winrun="$script_dir/winrun"
+
+if [[ $no_stdin -eq 1 ]]; then
+  exec "$winrun" --no-stdin -- docker "$@"
+fi
+exec "$winrun" -- docker "$@"
