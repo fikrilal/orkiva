@@ -11,5 +11,8 @@
     "test": "vitest run --config ../../vitest.config.ts",
     "dev": "tsx watch src/main.ts",
     "start": "node dist/main.js"
+  },
+  "dependencies": {
+    "@orkiva/shared": "workspace:*"
   }
 }

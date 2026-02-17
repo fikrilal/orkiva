@@ -88,19 +88,19 @@ Done when:
 
 ## 4) Define (D) — Runtime Config Contract
 
-- [ ] Create environment schema package (`packages/shared` or dedicated config module).
-- [ ] Use schema validation (`zod`) for:
+- [x] Create environment schema package (`packages/shared` or dedicated config module).
+- [x] Use schema validation (`zod`) for:
   - API config
   - worker config
   - DB config
   - auth/jwks config
   - observability config
   - trigger policy config (timeouts/retries/collision windows)
-- [ ] Provide `.env.example` with documented defaults.
-- [ ] Fail fast on invalid config at startup.
+- [x] Provide `.env.example` with documented defaults.
+- [x] Fail fast on invalid config at startup.
 
 Done when:
-- Starting any app with invalid/missing critical env exits with clear errors.
+- [x] Starting any app with invalid/missing critical env exits with clear errors.
 
 ## 5) Establish (E) — Database and Migration Baseline
 
@@ -127,7 +127,7 @@ Done when:
 - [x] MVP acceptance checklist exists.
 - [x] Repo skeleton compiles and tests cleanly.
 - [x] Strict quality gates and CI baseline are active.
-- [ ] Runtime env schema is validated at startup.
+- [x] Runtime env schema is validated at startup.
 - [ ] DB schema + migrations are executable from clean checkout.
 - [ ] All docs updated for any deviation from proposal defaults.
 
@@ -141,10 +141,10 @@ Done when:
 
 ## 8) Immediate Next Action (Do This First)
 
-- [ ] Implement **Define (D)** next:
-  - environment schema contract
-  - startup-time config validation
-  - `.env.example` baseline for API/worker/db/auth/observability/trigger policy
+- [ ] Implement **Establish (E)** next:
+  - Drizzle + migration pipeline
+  - Postgres compose baseline
+  - DB smoke test and bootstrap command
 
 Reason:
-- Quality gates are complete; config contract is needed before DB and feature modules.
+- Config contract is complete; DB baseline is the remaining foundation blocker.
