@@ -15,7 +15,12 @@ import {
 } from "drizzle-orm/pg-core";
 
 export const threadTypeEnum = pgEnum("thread_type", ["conversation", "workflow", "incident"]);
-export const threadStatusEnum = pgEnum("thread_status", ["active", "blocked", "resolved", "closed"]);
+export const threadStatusEnum = pgEnum("thread_status", [
+  "active",
+  "blocked",
+  "resolved",
+  "closed"
+]);
 export const messageKindEnum = pgEnum("message_kind", ["chat", "event", "system"]);
 export const managementModeEnum = pgEnum("management_mode", ["managed", "unmanaged"]);
 export const sessionStatusEnum = pgEnum("session_status", ["active", "idle", "offline"]);

@@ -4,11 +4,11 @@ MCP that connects AI agent sessions so they can coordinate work on their own.
 
 ## Status
 
-This repository is currently in **proposal-first** stage.
+This repository is currently in **foundation-bootstrap complete** stage.
 
 - Product, architecture, protocol, runtime, security, and rollout specs are defined.
-- Implementation scaffolding (`apps/*`, `packages/*`, infra) is not created yet.
-- Current code is documentation plus Windows/WSL helper wrappers under `tool/agent/`.
+- Monorepo scaffold (`apps/*`, `packages/*`, `infra/*`) is implemented.
+- Core runtime/domain logic is not implemented yet (next milestone).
 
 ## Why Orkiva Exists
 
@@ -38,24 +38,29 @@ Orkiva removes that bottleneck by providing:
 Planned runtime topology:
 
 1. `bridge-api`
+
 - MCP and HTTP entrypoints
 - thread/message/session orchestration
 - policy and governance enforcement
 - trigger job scheduling
 
 2. `supervisor-worker`
+
 - trigger execution engine
 - managed runtime control (`tmux` first)
 - human-input collision handling
 - fallback chain (`resume` then spawn)
 
 3. `operator-cli` (MVP optional, planned)
+
 - operator diagnostics, inspection, and overrides
 
 4. Shared packages
+
 - `domain`, `protocol`, `db`, `auth`, `observability`, `shared`
 
 Reference:
+
 - `docs/proposal/02-architecture/solution_architecture.md`
 - `docs/proposal/02-architecture/technical_stack_and_architecture.md`
 - `docs/proposal/02-architecture/system_tree_folder_structure.md`
@@ -81,6 +86,7 @@ Session/Wake:
 - `trigger_participant`
 
 Reference:
+
 - `docs/proposal/04-protocol/mcp_command_catalog.md`
 - `docs/proposal/04-protocol/protocol_spec.md`
 
@@ -93,6 +99,7 @@ Reference:
 - Human operator has final override authority.
 
 Reference:
+
 - `docs/proposal/05-security/security_and_governance.md`
 - `docs/proposal/07-decisions/open_questions.md`
 
@@ -116,6 +123,7 @@ Loop guard defaults:
 - block at `3` repeated-identical finding cycles
 
 Reference:
+
 - `docs/proposal/03-runtime/process_level_trigger_design.md`
 - `docs/proposal/03-runtime/tmux_supervisor_implementation_spec.md`
 
@@ -123,9 +131,13 @@ Reference:
 
 ```text
 .
-├─ AGENTS.md                 # strict contributor/AI rules
+├─ apps/                     # bridge-api, supervisor-worker, operator-cli
+├─ packages/                 # domain, protocol, db, auth, observability, shared
+├─ infra/                    # local infra bootstrap (postgres compose)
 ├─ docs/proposal/            # full proposal specs
-└─ tool/agent/               # Windows/WSL wrappers for dev commands
+├─ _WIP/                     # implementation roadmap and active todo docs
+├─ tool/agent/               # Windows/WSL wrappers for dev commands
+└─ AGENTS.md                 # strict contributor/AI rules
 ```
 
 ## Read the Proposal (Start Here)
@@ -137,6 +149,7 @@ Reference:
 5. `docs/proposal/04-protocol/protocol_spec.md`
 
 Or read the complete map:
+
 - `docs/proposal/proposal_overview.md`
 
 ## Development Environment (Current)
@@ -150,6 +163,24 @@ Use wrappers to avoid Linux/Windows artifact drift:
 - `tool/agent/pnpmw --no-stdin ...`
 - `tool/agent/dockw --no-stdin ...`
 - `tool/agent/winrun --no-stdin -- <command> ...`
+
+## Engineering Quality Gates
+
+All changes are expected to pass:
+
+- `pnpm run format`
+- `pnpm run lint`
+- `pnpm run typecheck`
+- `pnpm run deps:check`
+- `pnpm run test`
+- `pnpm run verify` (runs the full gate stack above)
+
+Quality policy highlights:
+
+- TypeScript strict mode + hardened compiler flags are mandatory.
+- ESLint forbids `any` and enforces typed import consistency.
+- Architecture boundaries are enforced with `dependency-cruiser`.
+- CI runs `pnpm run verify` on push and pull request.
 
 ## Planned Build Sequence
 

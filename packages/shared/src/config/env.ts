@@ -106,9 +106,8 @@ const parseOrThrow = <Output, Input>(
 export const loadBridgeApiConfig = (env: EnvInput = process.env): BridgeApiConfig =>
   parseOrThrow(bridgeApiConfigSchema, env, "bridge-api");
 
-export const loadSupervisorWorkerConfig = (
-  env: EnvInput = process.env
-): SupervisorWorkerConfig => parseOrThrow(supervisorWorkerConfigSchema, env, "supervisor-worker");
+export const loadSupervisorWorkerConfig = (env: EnvInput = process.env): SupervisorWorkerConfig =>
+  parseOrThrow(supervisorWorkerConfigSchema, env, "supervisor-worker");
 
 export const loadOperatorCliConfig = (env: EnvInput = process.env): OperatorCliConfig =>
   parseOrThrow(operatorCliConfigSchema, env, "operator-cli");

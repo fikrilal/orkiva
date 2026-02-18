@@ -5,6 +5,11 @@
 This file is the end-to-end high-level implementation roadmap for Orkiva MVP.
 Detailed task breakdowns will be created later per workstream.
 
+Detailed workstream todos:
+
+- `_WIP/todo_01_foundation_bootstrap.md` (A-E)
+- `_WIP/todo_02_core_product_surface.md` (F-M)
+
 ## Scope
 
 - MVP only (single-workspace trust domain)
