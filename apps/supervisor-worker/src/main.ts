@@ -1,11 +1,13 @@
 import { createDb, createDbPool } from "@orkiva/db";
 import { formatConfigValidationError, loadSupervisorWorkerConfig } from "@orkiva/shared";
 
+import { DbRuntimeRegistryStore, RuntimeRegistryService } from "./runtime-registry.js";
 import {
   DbUnreadReconciliationSnapshotStore,
   InMemoryUnreadReconciliationStateStore,
   UnreadReconciliationService
 } from "./unread-reconciliation.js";
+import { SupervisorWorkerLoop } from "./worker-loop.js";
 
 const service = "supervisor-worker";
 
@@ -17,19 +19,23 @@ try {
     new DbUnreadReconciliationSnapshotStore(db),
     new InMemoryUnreadReconciliationStateStore()
   );
+  const runtimeRegistryService = new RuntimeRegistryService(new DbRuntimeRegistryStore(db));
+  const workerLoop = new SupervisorWorkerLoop(reconciliationService, runtimeRegistryService);
 
   const runPollingTick = async (): Promise<void> => {
-    const result = await reconciliationService.reconcile({
+    const result = await workerLoop.runTick({
       workspaceId: config.WORKSPACE_ID,
       staleAfterHours: config.SESSION_STALE_AFTER_HOURS
     });
-    if (result.candidates.length > 0) {
+    const unreadResult = result.unreadReconciliation;
+    const runtimeResult = result.runtimeReconciliation;
+    if (unreadResult.candidates.length > 0 || runtimeResult.transitionedOffline > 0) {
       console.log(
-        `[${service}] unread reconciliation candidates=${result.candidates.length} participantsScanned=${result.stats.participantsScanned} deduplicated=${result.stats.deduplicatedParticipants}`
+        `[${service}] tick candidates=${unreadResult.candidates.length} participantsScanned=${unreadResult.stats.participantsScanned} deduplicated=${unreadResult.stats.deduplicatedParticipants} runtimesChecked=${runtimeResult.checkedRuntimes} transitionedOffline=${runtimeResult.transitionedOffline}`
       );
     } else {
       console.log(
-        `[${service}] unread reconciliation tick completed (participantsScanned=${result.stats.participantsScanned})`
+        `[${service}] tick completed (participantsScanned=${unreadResult.stats.participantsScanned}, runtimesChecked=${runtimeResult.checkedRuntimes})`
       );
     }
   };

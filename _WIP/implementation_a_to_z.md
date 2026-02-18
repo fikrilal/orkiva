@@ -71,7 +71,7 @@ Done when: polling fallback path consistently detects unread work and updates pa
 - [x] **O — Orchestrate** wake initiation (`trigger_participant`) at API layer.
 Done when: wake requests enqueue deterministic trigger jobs with policy-aware routing decisions.
 
-- [ ] **P — Provide** supervisor-worker runtime skeleton and registry reconciliation loop.
+- [x] **P — Provide** supervisor-worker runtime skeleton and registry reconciliation loop.
 Done when: worker can register, reconcile, and transition runtime states robustly.
 
 - [ ] **Q — Queue** trigger jobs with retries/backoff and dead-letter handling.

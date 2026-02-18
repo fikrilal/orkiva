@@ -91,22 +91,22 @@ Done when:
 
 ## 3) Provide (P) — Supervisor Worker Skeleton
 
-- [ ] Implement `apps/supervisor-worker` runtime skeleton:
+- [x] Implement `apps/supervisor-worker` runtime skeleton:
   - worker bootstrap + config loading
   - polling/dispatch loop
   - graceful shutdown
-- [ ] Add runtime registry lifecycle handlers:
+- [x] Add runtime registry lifecycle handlers:
   - register
   - heartbeat
   - reconcile status
   - deregister
-- [ ] Keep dependency boundaries strict:
+- [x] Keep dependency boundaries strict:
   - process control only in worker app
   - no MCP transport leakage into worker internals
-- [ ] Add tests for worker loop and registry state transitions.
+- [x] Add tests for worker loop and registry state transitions.
 
 Done when:
-- [ ] Worker can reconcile and progress runtime states safely under normal and degraded paths.
+- [x] Worker can reconcile and progress runtime states safely under normal and degraded paths.
 
 ## 4) Queue (Q) — Trigger Job Processing + Retry/Backoff
 
