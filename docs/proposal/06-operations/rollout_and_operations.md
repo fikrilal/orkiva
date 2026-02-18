@@ -148,11 +148,13 @@ Default hybrid policy (MVP):
 - token claim mismatch and expired-token rejection
 - cross-workspace isolation
 - malformed payload handling
+- repeated malformed payload bursts remain bounded to deterministic `INVALID_ARGUMENT` responses
 
 ## 4.4 Load Tests
 - sustained multi-thread writes/reads
 - burst traffic behavior
 - storage contention thresholds
+- concurrent write burst scenarios confirm no internal server errors and monotonic persisted sequencing
 
 ## 5. Migration and Backward Compatibility
 - Start with versioned MCP methods (`v1`).

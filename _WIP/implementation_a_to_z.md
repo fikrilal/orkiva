@@ -95,7 +95,7 @@ Done when: executioner-reviewer workflow completes without manual relay in test 
 - [x] **W — Workflow** pilot operations and operator CLI/JSON controls.
 Done when: operator can inspect, escalate, unblock, and override with auditable outcomes.
 
-- [ ] **X — eXercise** security, resilience, and load tests.
+- [x] **X — eXercise** security, resilience, and load tests.
 Done when: auth abuse, cross-workspace rejection, failure spikes, and concurrency stress are validated.
 
 - [ ] **Y — Yardstick** SLO/SLI and runbook readiness.
@@ -109,7 +109,7 @@ Done when: go-live checklist is signed off with known risks, rollback plan, and 
 - [x] 1. Complete **A, B, C, D, E** first (platform foundation).
 - [x] 2. Then complete **F, G, H, I, J, K, L, M** (core product surface).
 - [x] 3. Then complete **N, O, P, Q, R, S, U** (runtime orchestration reliability).
-- [ ] 4. Finish with **X, Y, Z** (operations, validation, launch readiness).
+- [ ] 4. Finish with **Y, Z** (operations, validation, launch readiness).
 
 ## Non-Goals in This File
 
