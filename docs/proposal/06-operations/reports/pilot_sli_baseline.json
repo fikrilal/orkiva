@@ -1,0 +1,33 @@
+{
+  "measuredAt": "2026-02-18T13:24:15.663Z",
+  "iterations": 120,
+  "thresholds": {
+    "postSuccessRate": 0.99,
+    "readSuccessRate": 0.995,
+    "postToVisibleP95Ms": 2000,
+    "messageToWakeTriggerP95Ms": 3000
+  },
+  "post": {
+    "attempts": 120,
+    "successes": 120,
+    "failures": 0,
+    "successRate": 1,
+    "p95LatencyMs": 1.285
+  },
+  "read": {
+    "attempts": 120,
+    "successes": 120,
+    "failures": 0,
+    "successRate": 1,
+    "p95LatencyMs": 2.552
+  },
+  "trigger": {
+    "attempts": 120,
+    "successes": 120,
+    "failures": 0,
+    "successRate": 1,
+    "p95LatencyMs": 1.695
+  },
+  "postToVisibleP95Ms": 4.322,
+  "messageToWakeTriggerP95Ms": 4.107
+}

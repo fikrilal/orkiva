@@ -212,5 +212,5 @@ Acceptance:
 ## Definition of Done (Project-Level)
 - Core PRD requirements in MVP scope are implemented.
 - Security acceptance criteria validated.
-- Operational runbooks are published.
-- Pilot success metrics are reported.
+- Operational runbooks are published (`docs/runbooks/mvp_incident_runbooks.md`) and drill evidence is recorded (`docs/proposal/06-operations/runbook_drill_evidence.md`).
+- Pilot success metrics are reported (`docs/proposal/06-operations/reports/pilot_sli_baseline.json`).

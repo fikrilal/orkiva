@@ -71,6 +71,10 @@ Required runbooks:
 - unmanaged runtime target in autonomous lane
 - human-input collision and deferred-trigger timeout
 
+Published artifacts:
+- runbook set: `docs/runbooks/mvp_incident_runbooks.md`
+- drill evidence log: `docs/proposal/06-operations/runbook_drill_evidence.md`
+
 Operator CLI baseline (MVP):
 - `inspect-thread --thread-id <id>` for thread/participant/message/trigger inspection.
 - `escalate-thread --thread-id <id> --reason <text>` to transition a thread to `blocked`.
@@ -112,6 +116,11 @@ Initial SLO targets:
 - read success >= 99.5%
 - p95 post-to-visible <= 2s
 - p95 message-to-wake-trigger <= 3s
+
+Measurement artifacts:
+- benchmark runner: `infra/scripts/pilot-sli-baseline.ts`
+- baseline report: `docs/proposal/06-operations/reports/pilot_sli_baseline.json`
+- threshold guard test: `apps/bridge-api/src/sli-benchmark.test.ts`
 
 Default hybrid policy (MVP):
 - supervisor polling interval: 5s
