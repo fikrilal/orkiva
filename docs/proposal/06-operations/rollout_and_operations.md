@@ -183,6 +183,9 @@ Default hybrid policy (MVP):
 - Runbooks published.
 - Pilot sign-off from primary users.
 
+Launch sign-off artifact:
+- `docs/proposal/06-operations/launch_readiness_and_handoff.md`
+
 ## 8. Post-Launch Review
 Within 2 weeks:
 - compare baseline and post-launch cycle times

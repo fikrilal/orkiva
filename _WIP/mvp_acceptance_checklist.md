@@ -28,7 +28,7 @@ Use this checklist as the implementation validation baseline.
 | F-06 | Read flow supports cursor-based retrieval and ack updates per participant | PRD FR-4/FR-6, Protocol `read_messages`/`ack_read`, Backlog 1.3/2.2 | Integration tests for cursor progression + unread behavior | [ ] | [ ] | |
 | F-07 | Thread summarization returns compressed context and open items | PRD FR-7, Protocol `summarize_thread`, Backlog 2.3 | Unit/integration tests for summary output shape | [ ] | [ ] | |
 | F-08 | Escalation markers and owner-assigned escalation flow are supported | PRD FR-9, Backlog 5.2 | Scenario test showing escalation + unblock path | [ ] | [ ] | |
-| F-09 | Pilot executioner-reviewer flow completes end-to-end without manual relay | PRD Goals/Launch Criteria, Backlog 5.1 | Recorded E2E run + assertions on automated handoff | [ ] | [ ] | |
+| F-09 | Pilot executioner-reviewer flow completes end-to-end without manual relay | PRD Goals/Launch Criteria, Backlog 5.1 | Recorded E2E run + assertions on automated handoff | [x] | [ ] | `apps/bridge-api/src/workflow.integration.test.ts` |
 
 ## B) Data, Ordering, Idempotency, and Versioning
 

@@ -101,7 +101,7 @@ Done when: auth abuse, cross-workspace rejection, failure spikes, and concurrenc
 - [x] **Y — Yardstick** SLO/SLI and runbook readiness.
 Done when: MVP targets are measured and incident runbooks are verified in drills.
 
-- [ ] **Z — Zero-gap** launch readiness and handoff.
+- [x] **Z — Zero-gap** launch readiness and handoff.
 Done when: go-live checklist is signed off with known risks, rollback plan, and phase-2 backlog.
 
 ## Critical Path (Start Here)
@@ -109,7 +109,7 @@ Done when: go-live checklist is signed off with known risks, rollback plan, and 
 - [x] 1. Complete **A, B, C, D, E** first (platform foundation).
 - [x] 2. Then complete **F, G, H, I, J, K, L, M** (core product surface).
 - [x] 3. Then complete **N, O, P, Q, R, S, U** (runtime orchestration reliability).
-- [ ] 4. Finish with **Z** (operations, validation, launch readiness).
+- [x] 4. Finish with **Z** (operations, validation, launch readiness).
 
 ## Non-Goals in This File
 
