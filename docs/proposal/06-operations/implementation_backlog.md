@@ -152,6 +152,8 @@ Acceptance:
 Acceptance:
 - End-to-end operation is possible via CLI and JSON outputs only.
 - No dashboard dependency exists in MVP execution path.
+- CLI exposes inspect/escalate/unblock/override control commands.
+- Mutating CLI controls emit audit events with explicit operator reason fields.
 
 ### Story 5.3: Dormant reviewer wake test
 Acceptance:

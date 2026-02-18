@@ -182,6 +182,21 @@ Quality policy highlights:
 - Architecture boundaries are enforced with `dependency-cruiser`.
 - CI runs `pnpm run verify` on push and pull request.
 
+## Operator CLI Controls
+
+`apps/operator-cli` provides JSON-first operator controls for pilot workflow operations:
+
+- `inspect-thread --thread-id <id>`
+- `escalate-thread --thread-id <id> --reason <text>`
+- `unblock-thread --thread-id <id> --reason <text>`
+- `override-close-thread --thread-id <id> --reason <human_override:...>`
+
+Behavior:
+
+- all status mutations are transition-validated before write
+- blocked->closed requires explicit override reason prefix
+- mutable commands write audit events for traceability
+
 ## Planned Build Sequence
 
 From `docs/proposal/06-operations/implementation_backlog.md`:

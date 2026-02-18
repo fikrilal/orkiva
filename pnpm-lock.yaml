@@ -66,7 +66,20 @@ importers:
         specifier: ^5.6.1
         version: 5.7.4
 
-  apps/operator-cli: {}
+  apps/operator-cli:
+    dependencies:
+      '@orkiva/db':
+        specifier: workspace:*
+        version: link:../../packages/db
+      '@orkiva/domain':
+        specifier: workspace:*
+        version: link:../../packages/domain
+      '@orkiva/shared':
+        specifier: workspace:*
+        version: link:../../packages/shared
+      drizzle-orm:
+        specifier: ^0.44.5
+        version: 0.44.7(@types/pg@8.16.0)(pg@8.18.0)
 
   apps/supervisor-worker:
     dependencies:

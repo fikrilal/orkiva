@@ -71,6 +71,13 @@ Required runbooks:
 - unmanaged runtime target in autonomous lane
 - human-input collision and deferred-trigger timeout
 
+Operator CLI baseline (MVP):
+- `inspect-thread --thread-id <id>` for thread/participant/message/trigger inspection.
+- `escalate-thread --thread-id <id> --reason <text>` to transition a thread to `blocked`.
+- `unblock-thread --thread-id <id> --reason <text>` to transition a thread back to `active`.
+- `override-close-thread --thread-id <id> --reason <human_override:...>` for explicit close overrides.
+- All mutable operations append audit events with operator actor identity.
+
 ## 3.2 Observability
 Metrics:
 - messages posted per minute
