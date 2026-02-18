@@ -2,9 +2,12 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import { AuthError, type VerifiedAuthClaims } from "@orkiva/auth";
 import {
+  ackReadOutputSchema,
   createThreadOutputSchema,
   getThreadOutputSchema,
+  postMessageOutputSchema,
   protocolErrorResponseSchema,
+  readMessagesOutputSchema,
   summarizeThreadOutputSchema,
   updateThreadStatusOutputSchema
 } from "@orkiva/protocol";
@@ -36,8 +39,10 @@ const tokenMap: Readonly<Record<string, VerifiedAuthClaims>> = {
   coordinator_wk2: makeClaims("coordinator", "wk_02", "coord_other")
 };
 
-const createTestApp = () =>
-  createBridgeApiApp({
+const createTestApp = () => {
+  let idCounter = 0;
+
+  return createBridgeApiApp({
     threadStore: new InMemoryThreadStore(),
     verifyAccessToken: (token) => {
       const claims = tokenMap[token];
@@ -48,10 +53,14 @@ const createTestApp = () =>
       return Promise.resolve(claims);
     },
     now: () => new Date(nowIso),
-    idGenerator: () => "fixed-id"
+    idGenerator: () => {
+      idCounter += 1;
+      return idCounter === 1 ? "fixed-id" : `fixed-id-${idCounter}`;
+    }
   });
+};
 
-describe("bridge-api phase 4", () => {
+describe("bridge-api phase 4-5", () => {
   const appsToClose: ReturnType<typeof createTestApp>[] = [];
 
   afterEach(async () => {
@@ -290,5 +299,354 @@ describe("bridge-api phase 4", () => {
     const payload = summarizeThreadOutputSchema.parse(summaryResponse.json());
     expect(payload.last_status).toBe("active");
     expect(typeof payload.summary).toBe("string");
+  });
+
+  it("posts messages and reads them in deterministic order with pagination", async () => {
+    const app = createTestApp();
+    appsToClose.push(app);
+
+    await app.inject({
+      method: "POST",
+      url: "/v1/mcp/create_thread",
+      headers: {
+        authorization: "Bearer coordinator_wk1"
+      },
+      payload: {
+        workspace_id: "wk_01",
+        title: "message read thread",
+        type: "workflow",
+        participants: ["participant_agent", "coordinator_agent"]
+      }
+    });
+
+    const postOne = await app.inject({
+      method: "POST",
+      url: "/v1/mcp/post_message",
+      headers: {
+        authorization: "Bearer participant_wk1"
+      },
+      payload: {
+        thread_id: "th_fixed-id",
+        schema_version: 1,
+        sender_agent_id: "participant_agent",
+        sender_session_id: "sess_participant_agent",
+        kind: "chat",
+        body: "message-one"
+      }
+    });
+    expect(postOne.statusCode).toBe(200);
+    postMessageOutputSchema.parse(postOne.json());
+
+    const postTwo = await app.inject({
+      method: "POST",
+      url: "/v1/mcp/post_message",
+      headers: {
+        authorization: "Bearer coordinator_wk1"
+      },
+      payload: {
+        thread_id: "th_fixed-id",
+        schema_version: 1,
+        kind: "event",
+        body: "message-two",
+        metadata: {
+          event_type: "update"
+        }
+      }
+    });
+    expect(postTwo.statusCode).toBe(200);
+    postMessageOutputSchema.parse(postTwo.json());
+
+    const firstPage = await app.inject({
+      method: "POST",
+      url: "/v1/mcp/read_messages",
+      headers: {
+        authorization: "Bearer auditor_wk1"
+      },
+      payload: {
+        thread_id: "th_fixed-id",
+        since_seq: 0,
+        limit: 1
+      }
+    });
+    expect(firstPage.statusCode).toBe(200);
+    const firstPayload = readMessagesOutputSchema.parse(firstPage.json());
+    expect(firstPayload.messages).toHaveLength(1);
+    expect(firstPayload.messages[0]?.seq).toBe(1);
+    expect(firstPayload.messages[0]?.body).toBe("message-one");
+    expect(firstPayload.next_seq).toBe(1);
+    expect(firstPayload.has_more).toBe(true);
+
+    const secondPage = await app.inject({
+      method: "POST",
+      url: "/v1/mcp/read_messages",
+      headers: {
+        authorization: "Bearer auditor_wk1"
+      },
+      payload: {
+        thread_id: "th_fixed-id",
+        since_seq: firstPayload.next_seq,
+        limit: 1
+      }
+    });
+    expect(secondPage.statusCode).toBe(200);
+    const secondPayload = readMessagesOutputSchema.parse(secondPage.json());
+    expect(secondPayload.messages).toHaveLength(1);
+    expect(secondPayload.messages[0]?.seq).toBe(2);
+    expect(secondPayload.messages[0]?.body).toBe("message-two");
+    expect(secondPayload.next_seq).toBe(2);
+    expect(secondPayload.has_more).toBe(false);
+
+    const emptyPage = await app.inject({
+      method: "POST",
+      url: "/v1/mcp/read_messages",
+      headers: {
+        authorization: "Bearer auditor_wk1"
+      },
+      payload: {
+        thread_id: "th_fixed-id",
+        since_seq: secondPayload.next_seq,
+        limit: 10
+      }
+    });
+    expect(emptyPage.statusCode).toBe(200);
+    const emptyPayload = readMessagesOutputSchema.parse(emptyPage.json());
+    expect(emptyPayload.messages).toHaveLength(0);
+    expect(emptyPayload.next_seq).toBe(2);
+    expect(emptyPayload.has_more).toBe(false);
+  });
+
+  it("supports idempotent post_message retries and rejects conflicting reuse", async () => {
+    const app = createTestApp();
+    appsToClose.push(app);
+
+    await app.inject({
+      method: "POST",
+      url: "/v1/mcp/create_thread",
+      headers: {
+        authorization: "Bearer coordinator_wk1"
+      },
+      payload: {
+        workspace_id: "wk_01",
+        title: "idempotency thread",
+        type: "workflow",
+        participants: ["participant_agent"]
+      }
+    });
+
+    const first = await app.inject({
+      method: "POST",
+      url: "/v1/mcp/post_message",
+      headers: {
+        authorization: "Bearer participant_wk1"
+      },
+      payload: {
+        thread_id: "th_fixed-id",
+        schema_version: 1,
+        kind: "chat",
+        body: "stable payload",
+        idempotency_key: "idem_01"
+      }
+    });
+    expect(first.statusCode).toBe(200);
+    const firstPayload = postMessageOutputSchema.parse(first.json());
+
+    const retry = await app.inject({
+      method: "POST",
+      url: "/v1/mcp/post_message",
+      headers: {
+        authorization: "Bearer participant_wk1"
+      },
+      payload: {
+        thread_id: "th_fixed-id",
+        schema_version: 1,
+        kind: "chat",
+        body: "stable payload",
+        idempotency_key: "idem_01"
+      }
+    });
+    expect(retry.statusCode).toBe(200);
+    const retryPayload = postMessageOutputSchema.parse(retry.json());
+    expect(retryPayload.message_id).toBe(firstPayload.message_id);
+    expect(retryPayload.seq).toBe(firstPayload.seq);
+
+    const conflict = await app.inject({
+      method: "POST",
+      url: "/v1/mcp/post_message",
+      headers: {
+        authorization: "Bearer participant_wk1"
+      },
+      payload: {
+        thread_id: "th_fixed-id",
+        schema_version: 1,
+        kind: "chat",
+        body: "changed payload",
+        idempotency_key: "idem_01"
+      }
+    });
+    expect(conflict.statusCode).toBe(409);
+    const conflictPayload = protocolErrorResponseSchema.parse(conflict.json());
+    expect(conflictPayload.error.code).toBe("IDEMPOTENCY_CONFLICT");
+  });
+
+  it("rejects sender identity mismatch hints for post_message", async () => {
+    const app = createTestApp();
+    appsToClose.push(app);
+
+    await app.inject({
+      method: "POST",
+      url: "/v1/mcp/create_thread",
+      headers: {
+        authorization: "Bearer coordinator_wk1"
+      },
+      payload: {
+        workspace_id: "wk_01",
+        title: "identity thread",
+        type: "workflow",
+        participants: ["participant_agent"]
+      }
+    });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/v1/mcp/post_message",
+      headers: {
+        authorization: "Bearer participant_wk1"
+      },
+      payload: {
+        thread_id: "th_fixed-id",
+        schema_version: 1,
+        sender_agent_id: "someone_else",
+        kind: "chat",
+        body: "bad hint"
+      }
+    });
+
+    expect(response.statusCode).toBe(403);
+    const payload = protocolErrorResponseSchema.parse(response.json());
+    expect(payload.error.code).toBe("FORBIDDEN");
+  });
+
+  it("acknowledges read progress monotonically and rejects regression", async () => {
+    const app = createTestApp();
+    appsToClose.push(app);
+
+    await app.inject({
+      method: "POST",
+      url: "/v1/mcp/create_thread",
+      headers: {
+        authorization: "Bearer coordinator_wk1"
+      },
+      payload: {
+        workspace_id: "wk_01",
+        title: "ack thread",
+        type: "workflow",
+        participants: ["participant_agent"]
+      }
+    });
+
+    await app.inject({
+      method: "POST",
+      url: "/v1/mcp/post_message",
+      headers: {
+        authorization: "Bearer participant_wk1"
+      },
+      payload: {
+        thread_id: "th_fixed-id",
+        schema_version: 1,
+        kind: "chat",
+        body: "m1"
+      }
+    });
+    await app.inject({
+      method: "POST",
+      url: "/v1/mcp/post_message",
+      headers: {
+        authorization: "Bearer participant_wk1"
+      },
+      payload: {
+        thread_id: "th_fixed-id",
+        schema_version: 1,
+        kind: "chat",
+        body: "m2"
+      }
+    });
+
+    const firstAck = await app.inject({
+      method: "POST",
+      url: "/v1/mcp/ack_read",
+      headers: {
+        authorization: "Bearer participant_wk1"
+      },
+      payload: {
+        thread_id: "th_fixed-id",
+        agent_id: "participant_agent",
+        last_read_seq: 1
+      }
+    });
+    expect(firstAck.statusCode).toBe(200);
+    ackReadOutputSchema.parse(firstAck.json());
+
+    const secondAck = await app.inject({
+      method: "POST",
+      url: "/v1/mcp/ack_read",
+      headers: {
+        authorization: "Bearer participant_wk1"
+      },
+      payload: {
+        thread_id: "th_fixed-id",
+        last_read_seq: 2
+      }
+    });
+    expect(secondAck.statusCode).toBe(200);
+    ackReadOutputSchema.parse(secondAck.json());
+
+    const regression = await app.inject({
+      method: "POST",
+      url: "/v1/mcp/ack_read",
+      headers: {
+        authorization: "Bearer participant_wk1"
+      },
+      payload: {
+        thread_id: "th_fixed-id",
+        last_read_seq: 1
+      }
+    });
+    expect(regression.statusCode).toBe(409);
+    const regressionPayload = protocolErrorResponseSchema.parse(regression.json());
+    expect(regressionPayload.error.code).toBe("CONFLICT");
+  });
+
+  it("rejects ack_read beyond latest sequence", async () => {
+    const app = createTestApp();
+    appsToClose.push(app);
+
+    await app.inject({
+      method: "POST",
+      url: "/v1/mcp/create_thread",
+      headers: {
+        authorization: "Bearer coordinator_wk1"
+      },
+      payload: {
+        workspace_id: "wk_01",
+        title: "ack bounds thread",
+        type: "workflow",
+        participants: ["participant_agent"]
+      }
+    });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/v1/mcp/ack_read",
+      headers: {
+        authorization: "Bearer participant_wk1"
+      },
+      payload: {
+        thread_id: "th_fixed-id",
+        last_read_seq: 1
+      }
+    });
+    expect(response.statusCode).toBe(400);
+    const payload = protocolErrorResponseSchema.parse(response.json());
+    expect(payload.error.code).toBe("INVALID_ARGUMENT");
   });
 });

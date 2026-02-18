@@ -165,6 +165,10 @@ Output:
 }
 ```
 
+Idempotency behavior:
+- If `(thread_id, sender_agent_id, idempotency_key)` matches an existing message with the same payload shape, return the original message result.
+- If the same tuple is reused with different payload content, return `IDEMPOTENCY_CONFLICT`.
+
 ## 3.3 read_messages
 Purpose:
 - Fetch ordered message stream after a cursor.
@@ -221,6 +225,10 @@ Output:
   "updated_at": "2026-02-17T12:05:06Z"
 }
 ```
+
+Validation rules:
+- `last_read_seq` must be monotonic per `(thread_id, agent_id)` (no regression).
+- `last_read_seq` must not exceed latest known thread sequence.
 
 ## 3.5 update_thread_status
 Purpose:
@@ -380,6 +388,7 @@ Error envelope:
 
 ## 7. Idempotency Rules
 - `post_message` with same `(thread_id, sender_agent_id, idempotency_key)` is treated as retry and returns original message ID.
+- Reuse of the same tuple with different payload content must return `IDEMPOTENCY_CONFLICT`.
 - Idempotency keys are retained for a configurable window (example: 24h).
 
 ## 8. Retention and Archival

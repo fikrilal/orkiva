@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { isDeepStrictEqual } from "node:util";
 
 import {
   AuthError,
@@ -7,13 +8,25 @@ import {
   authorizeOperation,
   type VerifiedAuthClaims
 } from "@orkiva/auth";
-import { DomainError, type ThreadStatus } from "@orkiva/domain";
 import {
+  DomainError,
+  acknowledgeRead,
+  createParticipantCursor,
+  getNextMessageSequence,
+  type ThreadStatus
+} from "@orkiva/domain";
+import {
+  ackReadInputSchema,
+  ackReadOutputSchema,
   createThreadInputSchema,
   createThreadOutputSchema,
   getThreadInputSchema,
   getThreadOutputSchema,
+  postMessageInputSchema,
+  postMessageOutputSchema,
   protocolErrorResponseSchema,
+  readMessagesInputSchema,
+  readMessagesOutputSchema,
   summarizeThreadInputSchema,
   summarizeThreadOutputSchema,
   updateThreadStatusInputSchema,
@@ -22,9 +35,16 @@ import {
 } from "@orkiva/protocol";
 import Fastify, { type FastifyInstance, type FastifyRequest } from "fastify";
 
-import type { ThreadStore } from "./thread-store.js";
+import type { MessageRecord, ThreadStore } from "./thread-store.js";
 
-type MCPMethodName = "create_thread" | "get_thread" | "update_thread_status" | "summarize_thread";
+type MCPMethodName =
+  | "create_thread"
+  | "get_thread"
+  | "update_thread_status"
+  | "summarize_thread"
+  | "post_message"
+  | "read_messages"
+  | "ack_read";
 
 export interface BridgeApiRequestContext {
   requestId: string;
@@ -151,6 +171,24 @@ const mapUnknownError = (error: unknown): BridgeApiError => {
 };
 
 const toIso = (value: Date): string => value.toISOString();
+
+const isIdempotentReplayMatch = (input: {
+  schemaVersion: number;
+  kind: MessageRecord["kind"];
+  body: string;
+  metadata?: Record<string, unknown>;
+  inReplyTo?: string;
+}): ((existing: MessageRecord) => boolean) => {
+  const normalizedMetadata = input.metadata ?? undefined;
+  const normalizedInReplyTo = input.inReplyTo ?? undefined;
+
+  return (existing) =>
+    existing.schemaVersion === input.schemaVersion &&
+    existing.kind === input.kind &&
+    existing.body === input.body &&
+    isDeepStrictEqual(existing.metadata ?? undefined, normalizedMetadata) &&
+    (existing.inReplyTo ?? undefined) === normalizedInReplyTo;
+};
 
 const threadRecordToProtocol = (record: {
   threadId: string;
@@ -332,6 +370,187 @@ export const createBridgeApiApp = (dependencies: BridgeApiAppDependencies): Fast
         summary: summary.summary,
         open_items: summary.openItems,
         last_status: summary.lastStatus
+      });
+    },
+    post_message: async (payload, request) => {
+      const input = postMessageInputSchema.parse(payload);
+      const { authClaims } = requireContext(request);
+
+      authorizeOperation(authClaims.role, "message:write");
+      assertPayloadIdentityMatchesClaims(authClaims, {
+        ...(input.sender_agent_id === undefined ? {} : { agent_id: input.sender_agent_id }),
+        ...(input.sender_session_id === undefined ? {} : { session_id: input.sender_session_id })
+      });
+
+      const existingThread = await dependencies.threadStore.getThreadById(input.thread_id);
+      if (!existingThread) {
+        throw new BridgeApiError("NOT_FOUND", 404, `Thread not found: ${input.thread_id}`);
+      }
+
+      assertWorkspaceBoundary(authClaims, existingThread.workspaceId);
+
+      if (input.in_reply_to !== undefined) {
+        const parentMessage = await dependencies.threadStore.getMessageById(
+          input.thread_id,
+          input.in_reply_to
+        );
+        if (!parentMessage) {
+          throw new BridgeApiError(
+            "INVALID_ARGUMENT",
+            400,
+            `"in_reply_to" does not reference a message in this thread`,
+            {
+              thread_id: input.thread_id,
+              in_reply_to: input.in_reply_to
+            }
+          );
+        }
+      }
+
+      if (input.idempotency_key !== undefined) {
+        const existingMessage = await dependencies.threadStore.getMessageByIdempotency(
+          input.thread_id,
+          authClaims.agentId,
+          input.idempotency_key
+        );
+        if (existingMessage) {
+          const replayMatcher = isIdempotentReplayMatch({
+            schemaVersion: input.schema_version,
+            kind: input.kind,
+            body: input.body,
+            ...(input.metadata === undefined ? {} : { metadata: input.metadata }),
+            ...(input.in_reply_to === undefined ? {} : { inReplyTo: input.in_reply_to })
+          });
+          if (!replayMatcher(existingMessage)) {
+            throw new BridgeApiError(
+              "IDEMPOTENCY_CONFLICT",
+              409,
+              "Idempotency key is already used with a different payload",
+              {
+                thread_id: input.thread_id,
+                sender_agent_id: authClaims.agentId,
+                idempotency_key: input.idempotency_key
+              }
+            );
+          }
+
+          return postMessageOutputSchema.parse({
+            message_id: existingMessage.messageId,
+            seq: existingMessage.seq,
+            thread_status: existingThread.status,
+            created_at: toIso(existingMessage.createdAt)
+          });
+        }
+      }
+
+      const latestSeq = await dependencies.threadStore.getLatestMessageSeq(input.thread_id);
+      const nextSeq = getNextMessageSequence(latestSeq);
+      const created = await dependencies.threadStore.createMessage({
+        messageId: `msg_${idGenerator()}`,
+        threadId: input.thread_id,
+        schemaVersion: input.schema_version,
+        seq: nextSeq,
+        senderAgentId: authClaims.agentId,
+        senderSessionId: authClaims.sessionId,
+        kind: input.kind,
+        body: input.body,
+        ...(input.metadata === undefined ? {} : { metadata: input.metadata }),
+        ...(input.in_reply_to === undefined ? {} : { inReplyTo: input.in_reply_to }),
+        ...(input.idempotency_key === undefined ? {} : { idempotencyKey: input.idempotency_key }),
+        createdAt: now()
+      });
+
+      return postMessageOutputSchema.parse({
+        message_id: created.messageId,
+        seq: created.seq,
+        thread_status: existingThread.status,
+        created_at: toIso(created.createdAt)
+      });
+    },
+    read_messages: async (payload, request) => {
+      const input = readMessagesInputSchema.parse(payload);
+      const { authClaims } = requireContext(request);
+
+      authorizeOperation(authClaims.role, "message:read");
+      if (input.agent_id !== undefined) {
+        assertPayloadIdentityMatchesClaims(authClaims, { agent_id: input.agent_id });
+      }
+
+      const existingThread = await dependencies.threadStore.getThreadById(input.thread_id);
+      if (!existingThread) {
+        throw new BridgeApiError("NOT_FOUND", 404, `Thread not found: ${input.thread_id}`);
+      }
+
+      assertWorkspaceBoundary(authClaims, existingThread.workspaceId);
+      const page = await dependencies.threadStore.readMessages(
+        input.thread_id,
+        input.since_seq,
+        input.limit
+      );
+
+      return readMessagesOutputSchema.parse({
+        messages: page.messages.map((message) => ({
+          message_id: message.messageId,
+          schema_version: message.schemaVersion,
+          seq: message.seq,
+          kind: message.kind,
+          body: message.body,
+          ...(message.metadata === undefined ? {} : { metadata: message.metadata }),
+          sender_agent_id: message.senderAgentId,
+          created_at: toIso(message.createdAt)
+        })),
+        next_seq: page.nextSeq,
+        has_more: page.hasMore
+      });
+    },
+    ack_read: async (payload, request) => {
+      const input = ackReadInputSchema.parse(payload);
+      const { authClaims } = requireContext(request);
+
+      authorizeOperation(authClaims.role, "message:read");
+      if (input.agent_id !== undefined) {
+        assertPayloadIdentityMatchesClaims(authClaims, { agent_id: input.agent_id });
+      }
+
+      const existingThread = await dependencies.threadStore.getThreadById(input.thread_id);
+      if (!existingThread) {
+        throw new BridgeApiError("NOT_FOUND", 404, `Thread not found: ${input.thread_id}`);
+      }
+
+      assertWorkspaceBoundary(authClaims, existingThread.workspaceId);
+      const latestSeq = await dependencies.threadStore.getLatestMessageSeq(input.thread_id);
+      if (input.last_read_seq > latestSeq) {
+        throw new BridgeApiError(
+          "INVALID_ARGUMENT",
+          400,
+          `"last_read_seq" cannot exceed latest thread sequence`,
+          {
+            thread_id: input.thread_id,
+            last_read_seq: input.last_read_seq,
+            latest_seq: latestSeq
+          }
+        );
+      }
+
+      const cursor =
+        (await dependencies.threadStore.getParticipantCursor(
+          input.thread_id,
+          authClaims.agentId
+        )) ??
+        createParticipantCursor({
+          threadId: input.thread_id,
+          agentId: authClaims.agentId,
+          createdAt: now()
+        });
+      const updatedCursor = acknowledgeRead(cursor, {
+        lastReadSeq: input.last_read_seq,
+        updatedAt: now()
+      });
+      await dependencies.threadStore.upsertParticipantCursor(updatedCursor);
+
+      return ackReadOutputSchema.parse({
+        ok: true,
+        updated_at: toIso(updatedCursor.updatedAt)
       });
     }
   };

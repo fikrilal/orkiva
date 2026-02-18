@@ -52,7 +52,7 @@ Done when: signed token claims are required, claim mismatch is rejected, and ACL
 - [x] **I — Implement** thread APIs (`create_thread`, `get_thread`, `update_thread_status`, `summarize_thread`).
 Done when: APIs pass unit + integration tests, including invalid transition paths.
 
-- [ ] **J — Implement** message APIs (`post_message`, `read_messages`, `ack_read`).
+- [x] **J — Implement** message APIs (`post_message`, `read_messages`, `ack_read`).
 Done when: monotonic ordering, pagination, and cursor updates are validated.
 
 - [ ] **K — Keep** idempotency and retry-safe write behavior correct.

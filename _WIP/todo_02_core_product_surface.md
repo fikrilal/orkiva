@@ -126,21 +126,21 @@ Done when:
 
 ## 5) Implement (J) — Message MCP APIs
 
-- [ ] Implement `post_message` path:
+- [x] Implement `post_message` path:
   - validated payload
   - claim-derived sender identity
   - monotonic `seq` assignment per thread
   - optional `in_reply_to` validation
-- [ ] Implement `read_messages` path:
+- [x] Implement `read_messages` path:
   - deterministic ordering
   - pagination limit guardrails
   - `next_seq` + `has_more` semantics
-- [ ] Implement `ack_read` path:
+- [x] Implement `ack_read` path:
   - cursor monotonic update (`last_read_seq` must not regress)
-- [ ] Add unit + integration tests for ordering and cursor behavior.
+- [x] Add unit + integration tests for ordering and cursor behavior.
 
 Done when:
-- [ ] Message read/write/ack behavior is deterministic and test-validated.
+- [x] Message read/write/ack behavior is deterministic and test-validated.
 
 ## 6) Keep (K) — Idempotency and Retry-Safe Writes
 
@@ -218,7 +218,8 @@ Done when:
 - [x] Then Phase 2 (G): define protocol schemas for thread/message/session methods.
 - [x] Then Phase 3 (H): implement token verification and authorization helpers in `packages/auth`.
 - [x] Then Phase 4 (I): wire `bridge-api` runtime skeleton and thread APIs.
-- [ ] Then Phase 5 (J): implement message MCP methods (`post_message`, `read_messages`, `ack_read`).
+- [x] Then Phase 5 (J): implement message MCP methods (`post_message`, `read_messages`, `ack_read`).
+- [ ] Then Phase 6 (K): enforce idempotency race/concurrency semantics and retry-safety.
 
 Reason:
 - Contract-first + domain-first sequencing reduces API churn and rework.
