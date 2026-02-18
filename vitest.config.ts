@@ -22,6 +22,12 @@ export default defineConfig({
         replacement: fileURLToPath(new URL("./packages/protocol/src/index.ts", import.meta.url))
       },
       {
+        find: "@orkiva/observability",
+        replacement: fileURLToPath(
+          new URL("./packages/observability/src/index.ts", import.meta.url)
+        )
+      },
+      {
         find: "@orkiva/shared",
         replacement: fileURLToPath(new URL("./packages/shared/src/index.ts", import.meta.url))
       }

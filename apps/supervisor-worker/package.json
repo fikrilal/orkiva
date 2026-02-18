@@ -15,6 +15,7 @@
   "dependencies": {
     "@orkiva/db": "workspace:*",
     "@orkiva/domain": "workspace:*",
+    "@orkiva/observability": "workspace:*",
     "@orkiva/shared": "workspace:*",
     "drizzle-orm": "^0.44.5"
   }

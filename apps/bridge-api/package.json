@@ -17,6 +17,7 @@
     "@orkiva/auth": "workspace:*",
     "@orkiva/db": "workspace:*",
     "@orkiva/domain": "workspace:*",
+    "@orkiva/observability": "workspace:*",
     "@orkiva/protocol": "workspace:*",
     "@orkiva/shared": "workspace:*",
     "drizzle-orm": "^0.44.5",

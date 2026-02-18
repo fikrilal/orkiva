@@ -74,6 +74,7 @@ const createTestApp = (options?: {
   sessionStore?: InMemorySessionStore;
   threadStore?: InMemoryThreadStore;
   triggerStore?: InMemoryTriggerStore;
+  readinessCheck?: () => Promise<boolean>;
 }) => {
   let idCounter = 0;
 
@@ -90,6 +91,7 @@ const createTestApp = (options?: {
 
       return Promise.resolve(claims);
     },
+    ...(options?.readinessCheck === undefined ? {} : { readinessCheck: options.readinessCheck }),
     now: () => new Date(nowIso),
     idGenerator: () => {
       idCounter += 1;
@@ -128,6 +130,48 @@ describe("bridge-api phase 4-8", () => {
     expect(response.statusCode).toBe(401);
     const payload = protocolErrorResponseSchema.parse(response.json());
     expect(payload.error.code).toBe("UNAUTHORIZED");
+  });
+
+  it("exposes readiness and metrics endpoints", async () => {
+    const app = createTestApp({
+      readinessCheck: () => Promise.resolve(true)
+    });
+    appsToClose.push(app);
+
+    const ready = await app.inject({
+      method: "GET",
+      url: "/ready"
+    });
+    expect(ready.statusCode).toBe(200);
+    expect(ready.json()).toMatchObject({
+      ok: true,
+      service: "bridge-api"
+    });
+
+    await app.inject({
+      method: "GET",
+      url: "/health"
+    });
+    const metrics = await app.inject({
+      method: "GET",
+      url: "/metrics"
+    });
+    expect(metrics.statusCode).toBe(200);
+    expect(metrics.headers["content-type"]).toContain("text/plain");
+    expect(metrics.body).toContain("bridge_requests_total");
+  });
+
+  it("returns 503 from /ready when dependency check fails", async () => {
+    const app = createTestApp({
+      readinessCheck: () => Promise.resolve(false)
+    });
+    appsToClose.push(app);
+
+    const ready = await app.inject({
+      method: "GET",
+      url: "/ready"
+    });
+    expect(ready.statusCode).toBe(503);
   });
 
   it("creates and retrieves a thread with authorized roles", async () => {

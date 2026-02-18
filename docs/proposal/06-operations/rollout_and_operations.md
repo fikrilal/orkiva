@@ -80,10 +80,16 @@ Metrics:
 - escalations per day
 - loop-detection trigger count
 - wake attempts by result (`triggered`, `already_active`, `failed`, `fallback_spawned`)
+- API request counters and cumulative duration exported from `/metrics`
 
 Logs:
 - request-level structured logs with request ID
 - policy decision traces for denied operations
+- supervisor tick lifecycle logs (`tick.completed`, `tick.idle`, `tick.failed`)
+
+Health and readiness:
+- `/health`: process liveness signal.
+- `/ready`: dependency readiness signal (DB query check in bridge-api bootstrap path).
 
 Tracing:
 - correlation from agent request to persistence and notification path

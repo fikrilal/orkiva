@@ -113,7 +113,8 @@ Acceptance:
 ### Story 4.2: Metrics and health checks
 Acceptance:
 - Metrics exported for throughput, latency, failure, escalations.
-- Health endpoint reports dependency status.
+- Health endpoint reports liveness and readiness endpoint reports dependency status.
+- Metrics are exposed via a scrapeable endpoint (`/metrics`).
 
 ### Story 4.3: Retry and idempotency hardening
 Acceptance:

@@ -39,6 +39,7 @@ import {
   updateThreadStatusOutputSchema,
   type ProtocolErrorCode
 } from "@orkiva/protocol";
+import { createJsonLogger, MetricsRegistry } from "@orkiva/observability";
 import Fastify, { type FastifyInstance, type FastifyRequest } from "fastify";
 
 import type { AuditEventInput, AuditStore } from "./audit-store.js";
@@ -65,6 +66,7 @@ export interface BridgeApiRequestContext {
 declare module "fastify" {
   interface FastifyRequest {
     context?: BridgeApiRequestContext;
+    receivedAtMs?: number;
   }
 }
 
@@ -76,6 +78,7 @@ export interface BridgeApiAppDependencies {
   verifyAccessToken: (token: string) => Promise<VerifiedAuthClaims>;
   sessionStaleAfterHours?: number;
   triggerMaxRetries?: number;
+  readinessCheck?: () => Promise<boolean>;
   now?: () => Date;
   idGenerator?: () => string;
 }
@@ -424,6 +427,9 @@ const threadRecordToProtocol = (record: {
 export const createBridgeApiApp = (dependencies: BridgeApiAppDependencies): FastifyInstance => {
   const now = dependencies.now ?? (() => new Date());
   const idGenerator = dependencies.idGenerator ?? randomUUID;
+  const readinessCheck = dependencies.readinessCheck ?? (() => Promise.resolve(true));
+  const logger = createJsonLogger("bridge-api");
+  const metrics = new MetricsRegistry();
   const sessionStaleAfterHours =
     dependencies.sessionStaleAfterHours ?? DEFAULT_SESSION_STALE_AFTER_HOURS;
   const triggerMaxRetries = dependencies.triggerMaxRetries ?? DEFAULT_TRIGGER_MAX_RETRIES;
@@ -459,6 +465,7 @@ export const createBridgeApiApp = (dependencies: BridgeApiAppDependencies): Fast
   });
 
   app.addHook("onRequest", async (request) => {
+    request.receivedAtMs = now().getTime();
     if (!request.url.startsWith("/v1/")) {
       return;
     }
@@ -477,6 +484,19 @@ export const createBridgeApiApp = (dependencies: BridgeApiAppDependencies): Fast
 
   app.setErrorHandler(async (error, request, reply) => {
     const mapped = mapUnknownError(error);
+    logger.error("request.failed", {
+      request_id: request.id,
+      operation: deriveOperationName(request),
+      status_code: mapped.statusCode,
+      error_code: mapped.code,
+      message: mapped.message
+    });
+    metrics.incrementCounter("bridge_errors_total", {
+      help: "Bridge API errors by code",
+      labels: {
+        code: mapped.code
+      }
+    });
     if (mapped.statusCode === 401 || mapped.statusCode === 403) {
       const threadId = extractThreadIdFromBody(request);
       const context = request.context;
@@ -512,11 +532,61 @@ export const createBridgeApiApp = (dependencies: BridgeApiAppDependencies): Fast
     void reply.status(mapped.statusCode).send(payload);
   });
 
+  app.addHook("onResponse", async (request, reply) => {
+    const startedAtMs = request.receivedAtMs ?? now().getTime();
+    const durationMs = Math.max(now().getTime() - startedAtMs, 0);
+    metrics.incrementCounter("bridge_requests_total", {
+      help: "Bridge API requests by operation and status",
+      labels: {
+        operation: deriveOperationName(request),
+        method: request.method,
+        status_code: String(reply.statusCode)
+      }
+    });
+    metrics.incrementCounter("bridge_request_duration_ms_total", {
+      help: "Bridge API cumulative request duration in milliseconds",
+      labels: {
+        operation: deriveOperationName(request)
+      },
+      value: durationMs
+    });
+
+    logger.info("request.completed", {
+      request_id: request.id,
+      operation: deriveOperationName(request),
+      method: request.method,
+      status_code: reply.statusCode,
+      duration_ms: durationMs
+    });
+  });
+
   app.get("/health", () => ({
     ok: true,
     service: "bridge-api",
     now: now().toISOString()
   }));
+
+  app.get("/ready", async (_request, reply) => {
+    const ready = await readinessCheck();
+    if (!ready) {
+      return reply.status(503).send({
+        ok: false,
+        service: "bridge-api",
+        now: now().toISOString()
+      });
+    }
+
+    return reply.send({
+      ok: true,
+      service: "bridge-api",
+      now: now().toISOString()
+    });
+  });
+
+  app.get("/metrics", (_request, reply) => {
+    reply.header("content-type", "text/plain; version=0.0.4; charset=utf-8");
+    return reply.send(metrics.renderPrometheus());
+  });
 
   const methodHandlers: Record<
     MCPMethodName,

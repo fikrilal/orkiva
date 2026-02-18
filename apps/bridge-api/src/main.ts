@@ -1,5 +1,6 @@
 import { createAccessTokenVerifier } from "@orkiva/auth";
 import { createDb, createDbPool } from "@orkiva/db";
+import { createJsonLogger } from "@orkiva/observability";
 import { formatConfigValidationError, loadBridgeApiConfig } from "@orkiva/shared";
 
 import { createBridgeApiApp } from "./app.js";
@@ -9,6 +10,7 @@ import { DbThreadStore } from "./thread-store.js";
 import { DbTriggerStore } from "./trigger-store.js";
 
 const service = "bridge-api";
+const logger = createJsonLogger(service);
 
 try {
   const config = loadBridgeApiConfig(process.env);
@@ -30,7 +32,12 @@ try {
     auditStore,
     verifyAccessToken,
     sessionStaleAfterHours: config.SESSION_STALE_AFTER_HOURS,
-    triggerMaxRetries: config.TRIGGER_MAX_RETRIES
+    triggerMaxRetries: config.TRIGGER_MAX_RETRIES,
+    readinessCheck: () =>
+      dbPool
+        .query("select 1 as ok")
+        .then(() => true)
+        .catch(() => false)
   });
 
   const closeResources = async (): Promise<void> => {
@@ -51,16 +58,22 @@ try {
       port: config.API_PORT
     })
     .then(() => {
-      console.log(
-        `[${service}] listening on ${config.API_HOST}:${config.API_PORT} (workspace=${config.WORKSPACE_ID})`
-      );
+      logger.info("bootstrap.complete", {
+        host: config.API_HOST,
+        port: config.API_PORT,
+        workspace: config.WORKSPACE_ID
+      });
     })
     .catch((error: unknown) => {
       const message = error instanceof Error ? error.message : String(error);
-      console.error(`[${service}] failed to start: ${message}`);
+      logger.error("bootstrap.failed", {
+        error: message
+      });
       void closeResources().finally(() => process.exit(1));
     });
 } catch (error) {
-  console.error(formatConfigValidationError(error));
+  logger.error("config.invalid", {
+    error: formatConfigValidationError(error)
+  });
   process.exit(1);
 }

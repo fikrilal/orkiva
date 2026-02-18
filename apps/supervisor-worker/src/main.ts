@@ -1,4 +1,5 @@
 import { createDb, createDbPool } from "@orkiva/db";
+import { createJsonLogger } from "@orkiva/observability";
 import { formatConfigValidationError, loadSupervisorWorkerConfig } from "@orkiva/shared";
 
 import { DbRuntimeRegistryStore, RuntimeRegistryService } from "./runtime-registry.js";
@@ -14,6 +15,7 @@ import {
 import { SupervisorWorkerLoop } from "./worker-loop.js";
 
 const service = "supervisor-worker";
+const logger = createJsonLogger(service);
 
 try {
   const config = loadSupervisorWorkerConfig(process.env);
@@ -72,20 +74,35 @@ try {
       runtimeResult.transitionedOffline > 0 ||
       queueResult.claimedJobs > 0
     ) {
-      console.log(
-        `[${service}] tick candidates=${unreadResult.candidates.length} participantsScanned=${unreadResult.stats.participantsScanned} deduplicated=${unreadResult.stats.deduplicatedParticipants} runtimesChecked=${runtimeResult.checkedRuntimes} transitionedOffline=${runtimeResult.transitionedOffline} jobsClaimed=${queueResult.claimedJobs} delivered=${queueResult.delivered} retried=${queueResult.retried} fallbackResumed=${queueResult.fallbackResumed} fallbackSpawned=${queueResult.fallbackSpawned} autoBlocked=${queueResult.autoBlocked} deadLettered=${queueResult.deadLettered}`
-      );
+      logger.info("tick.completed", {
+        candidates: unreadResult.candidates.length,
+        participants_scanned: unreadResult.stats.participantsScanned,
+        deduplicated_participants: unreadResult.stats.deduplicatedParticipants,
+        runtimes_checked: runtimeResult.checkedRuntimes,
+        transitioned_offline: runtimeResult.transitionedOffline,
+        jobs_claimed: queueResult.claimedJobs,
+        delivered: queueResult.delivered,
+        retried: queueResult.retried,
+        fallback_resumed: queueResult.fallbackResumed,
+        fallback_spawned: queueResult.fallbackSpawned,
+        auto_blocked: queueResult.autoBlocked,
+        dead_lettered: queueResult.deadLettered
+      });
     } else {
-      console.log(
-        `[${service}] tick completed (participantsScanned=${unreadResult.stats.participantsScanned}, runtimesChecked=${runtimeResult.checkedRuntimes}, jobsClaimed=${queueResult.claimedJobs})`
-      );
+      logger.info("tick.idle", {
+        participants_scanned: unreadResult.stats.participantsScanned,
+        runtimes_checked: runtimeResult.checkedRuntimes,
+        jobs_claimed: queueResult.claimedJobs
+      });
     }
   };
 
   const tick = (): void => {
     void runPollingTick().catch((error: unknown) => {
       const message = error instanceof Error ? error.message : "unknown error";
-      console.error(`[${service}] unread reconciliation tick failed: ${message}`);
+      logger.error("tick.failed", {
+        error: message
+      });
     });
   };
 
@@ -101,10 +118,14 @@ try {
       .end()
       .catch((error: unknown) => {
         const message = error instanceof Error ? error.message : "unknown error";
-        console.error(`[${service}] failed to close db pool: ${message}`);
+        logger.error("shutdown.db_close_failed", {
+          error: message
+        });
       })
       .finally(() => {
-        console.log(`[${service}] shutdown complete (${signal})`);
+        logger.info("shutdown.complete", {
+          signal
+        });
         process.exit(0);
       });
   };
@@ -112,15 +133,20 @@ try {
   const intervalHandle = setInterval(tick, config.WORKER_POLL_INTERVAL_MS);
   void runPollingTick().catch((error: unknown) => {
     const message = error instanceof Error ? error.message : "unknown error";
-    console.error(`[${service}] initial unread reconciliation failed: ${message}`);
+    logger.error("bootstrap.initial_tick_failed", {
+      error: message
+    });
   });
   process.on("SIGINT", () => shutdown("SIGINT"));
   process.on("SIGTERM", () => shutdown("SIGTERM"));
 
-  console.log(
-    `[${service}] bootstrap complete (workspace=${config.WORKSPACE_ID}, pollIntervalMs=${config.WORKER_POLL_INTERVAL_MS})`
-  );
+  logger.info("bootstrap.complete", {
+    workspace: config.WORKSPACE_ID,
+    poll_interval_ms: config.WORKER_POLL_INTERVAL_MS
+  });
 } catch (error) {
-  console.error(formatConfigValidationError(error));
+  logger.error("config.invalid", {
+    error: formatConfigValidationError(error)
+  });
   process.exit(1);
 }

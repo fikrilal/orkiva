@@ -50,6 +50,9 @@ importers:
       '@orkiva/domain':
         specifier: workspace:*
         version: link:../../packages/domain
+      '@orkiva/observability':
+        specifier: workspace:*
+        version: link:../../packages/observability
       '@orkiva/protocol':
         specifier: workspace:*
         version: link:../../packages/protocol
@@ -73,6 +76,9 @@ importers:
       '@orkiva/domain':
         specifier: workspace:*
         version: link:../../packages/domain
+      '@orkiva/observability':
+        specifier: workspace:*
+        version: link:../../packages/observability
       '@orkiva/shared':
         specifier: workspace:*
         version: link:../../packages/shared
