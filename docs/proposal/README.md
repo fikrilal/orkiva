@@ -6,7 +6,7 @@
 - `03-runtime/`: process-level trigger design and tmux supervisor spec.
 - `04-protocol/`: MCP protocol and command catalog.
 - `05-security/`: security and governance policy.
-- `06-operations/`: rollout plan, implementation backlog, SLO baseline, runbook drill evidence, and launch handoff.
+- `06-operations/`: rollout plan, implementation backlog, SLO baseline, runbook drill evidence, launch handoff, and release tag plan.
 - `07-decisions/`: decision register.
 
 ## Start Here

@@ -57,6 +57,9 @@ Baseline commands:
 - Unblock thread: `tool/agent/pnpmw --no-stdin run dev:operator-cli -- unblock-thread --thread-id <id> --reason <text>`
 - Override close: `tool/agent/pnpmw --no-stdin run dev:operator-cli -- override-close-thread --thread-id <id> --reason human_override:<text>`
 
+Release cut reference:
+- `docs/proposal/06-operations/release_tag_plan.md`
+
 ## Phase-2 Backlog (Post-MVP)
 
 1. Add DB-backed integration tests to CI with managed Postgres provisioning.
