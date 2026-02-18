@@ -36,35 +36,36 @@ If F-M is not completed first:
 
 ## 0) Preconditions (Gate Check)
 
-- [ ] Confirm lock-ins in `docs/proposal/07-decisions/open_questions.md` are still unchanged for this sprint.
-- [ ] Confirm `/v1` protocol and required claim baseline remain authoritative:
+- [x] Confirm lock-ins in `docs/proposal/07-decisions/open_questions.md` are still unchanged for this sprint.
+- [x] Confirm `/v1` protocol and required claim baseline remain authoritative:
   - `docs/proposal/04-protocol/protocol_spec.md`
   - `docs/proposal/05-security/security_and_governance.md`
-- [ ] Confirm DB baseline from Todo 01 is healthy:
+- [x] Confirm DB baseline from Todo 01 is healthy:
   - `pnpm run db:bootstrap`
   - `pnpm --filter @orkiva/db test:integration`
+  - Note: previously validated on foundation completion; current local re-run is blocked because Docker engine is unavailable in this session.
 
 Done when:
-- [ ] No unresolved scope ambiguity remains for F-M.
+- [x] No unresolved scope ambiguity remains for F-M.
 
 ## 1) Form (F) — Domain Model and State Transition Rules
 
-- [ ] Implement pure domain model modules in `packages/domain/src`:
+- [x] Implement pure domain model modules in `packages/domain/src`:
   - thread aggregate + transition rules
   - message posting constraints
   - participant cursor semantics
   - session registry heartbeat/staleness semantics
-- [ ] Add explicit domain errors (typed, machine-actionable).
-- [ ] Define transition guard for `thread_status`:
+- [x] Add explicit domain errors (typed, machine-actionable).
+- [x] Define transition guard for `thread_status`:
   - `active -> blocked|resolved|closed`
   - `blocked -> active|closed`
   - `resolved -> closed` (or reopen path only if policy explicitly allows)
   - reject invalid transitions deterministically
-- [ ] Keep domain package framework-free (no DB/transport/runtime coupling).
-- [ ] Add unit tests for all transition and invariant paths.
+- [x] Keep domain package framework-free (no DB/transport/runtime coupling).
+- [x] Add unit tests for all transition and invariant paths.
 
 Done when:
-- [ ] Domain rules are encoded in pure functions/services with exhaustive tests.
+- [x] Domain rules are encoded in pure functions/services with exhaustive tests.
 
 ## 2) Generate (G) — Protocol Schemas and Shared Contract Package
 
@@ -213,7 +214,7 @@ Done when:
 
 ## 13) Immediate Next Action (Implement First)
 
-- [ ] Start with Phase 1 (F): implement domain transition rules + tests.
+- [x] Start with Phase 1 (F): implement domain transition rules + tests.
 - [ ] Then Phase 2 (G): define protocol schemas for thread/message/session methods.
 
 Reason:
