@@ -242,6 +242,11 @@ Benefit:
 - Auto-block thread on no-progress conversation at `20` turns.
 - Auto-block when identical unresolved finding repeats `3` cycles.
 
+Implementation notes for MVP:
+- Runtime worker enforces a default per-thread/per-agent limiter of `10` trigger attempts per minute.
+- Rate-limited triggers are deferred with deterministic `TRIGGER_RATE_LIMITED` classification.
+- Loop guard threshold trips emit deterministic `THREAD_AUTO_BLOCKED` classification.
+
 ## 15. Security and Access
 - Only orchestrator service can call supervisor trigger APIs.
 - Supervisor APIs require mTLS or signed service token.

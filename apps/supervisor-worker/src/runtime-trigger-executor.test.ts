@@ -260,4 +260,68 @@ describe("ManagedRuntimeTriggerJobExecutor", () => {
       }
     });
   });
+
+  it("defers when operator is busy and respects defer timeout", async () => {
+    const runtimeStore = new InMemoryRuntimeRegistryStore();
+    await seedRuntime(runtimeStore);
+    const ptyAdapter: TriggerPtyAdapter = {
+      deliver: () =>
+        Promise.resolve({
+          delivered: false,
+          errorCode: "OPERATOR_BUSY",
+          details: {
+            target: "agents_mobile_core:reviewer.0"
+          }
+        })
+    };
+    const executor = new ManagedRuntimeTriggerJobExecutor(runtimeStore, ptyAdapter, {
+      quietWindowMs: 20_000,
+      recheckMs: 5_000,
+      maxDeferMs: 60_000
+    });
+
+    const deferred = await executor.execute({
+      job: baseJob({
+        createdAt: new Date("2026-02-18T10:00:00.000Z")
+      }),
+      attemptNo: 1,
+      now: new Date("2026-02-18T10:00:05.000Z")
+    });
+    expect(deferred).toEqual({
+      attemptResult: "deferred",
+      retryable: true,
+      retryAfterMs: 5000,
+      errorCode: "OPERATOR_BUSY",
+      details: {
+        runtime: "tmux:agents_mobile_core:reviewer.0",
+        deferredMs: 5000,
+        quietWindowMs: 20000,
+        maxDeferMs: 60000,
+        delivery: {
+          target: "agents_mobile_core:reviewer.0"
+        }
+      }
+    });
+
+    const timeout = await executor.execute({
+      job: baseJob({
+        createdAt: new Date("2026-02-18T10:00:00.000Z")
+      }),
+      attemptNo: 2,
+      now: new Date("2026-02-18T10:01:00.000Z")
+    });
+    expect(timeout).toEqual({
+      attemptResult: "timeout",
+      retryable: false,
+      errorCode: "DEFER_TIMEOUT",
+      details: {
+        runtime: "tmux:agents_mobile_core:reviewer.0",
+        deferredMs: 60000,
+        maxDeferMs: 60000,
+        delivery: {
+          target: "agents_mobile_core:reviewer.0"
+        }
+      }
+    });
+  });
 });

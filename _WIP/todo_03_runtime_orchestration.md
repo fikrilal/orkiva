@@ -140,34 +140,34 @@ Done when:
 
 ## 6) Safeguard (S) — Collision, Loop, and Rate Controls
 
-- [ ] Implement collision policy defaults:
+- [x] Implement collision policy defaults:
   - quiet window `20s`
   - re-check `5s`
   - max defer `60s`
-- [ ] Implement per-agent/per-thread trigger rate limits.
-- [ ] Implement loop safeguards:
+- [x] Implement per-agent/per-thread trigger rate limits.
+- [x] Implement loop safeguards:
   - auto-block after `20` no-progress turns
   - auto-block after `3` repeated-identical finding cycles
-- [ ] Implement explicit force-override path with required audit reason.
-- [ ] Add tests for collision defer/override and safeguard thresholds.
+- [x] Implement explicit force-override path with required audit reason.
+- [x] Add tests for collision defer/override and safeguard thresholds.
 
 Done when:
-- [ ] Safety controls are policy-complete, deterministic, and test-covered.
+- [x] Safety controls are policy-complete, deterministic, and test-covered.
 
 ## 7) Unblock (U) — Fallback Chain and Failure Classification
 
-- [ ] Implement deterministic fallback order:
+- [x] Implement deterministic fallback order:
   - live managed trigger
   - `resume` attempt (max 2)
   - spawn with thread summary
-- [ ] Apply stale-session shortcut:
+- [x] Apply stale-session shortcut:
   - `>12h` stale skips direct resume when policy requires
-- [ ] Apply crash-loop shortcut policy.
-- [ ] Emit clear status/error classifications for every fallback hop.
-- [ ] Add tests for each branch and terminal failure status.
+- [x] Apply crash-loop shortcut policy.
+- [x] Emit clear status/error classifications for every fallback hop.
+- [x] Add tests for each branch and terminal failure status.
 
 Done when:
-- [ ] Fallback chain execution is bounded, explainable, and auditable.
+- [x] Fallback chain execution is bounded, explainable, and auditable.
 
 ## 8) Cross-Cutting Engineering Requirements
 
@@ -189,15 +189,15 @@ Done when:
 - [x] `tool/agent/pnpmw --no-stdin run deps:check`
 - [x] `tool/agent/pnpmw --no-stdin run test`
 - [x] `tool/agent/pnpmw --no-stdin run verify`
-- [ ] DB-backed integration tests pass for trigger/session/runtime paths.
-- [ ] Deterministic fallback and collision behavior validated by scenario tests.
+- [x] DB-backed integration tests pass for trigger/session/runtime paths.
+- [x] Deterministic fallback and collision behavior validated by scenario tests.
 
 ## 10) N-U Exit Criteria
 
-- [ ] `N, O, P, Q, R, S, U` all complete.
-- [ ] `trigger_participant` is production-safe for MVP lock-ins.
-- [ ] Managed-runtime trigger + fallback chain is deterministic and auditable.
-- [ ] No unresolved high-severity risks in runtime orchestration scope.
+- [x] `N, O, P, Q, R, S, U` all complete.
+- [x] `trigger_participant` is production-safe for MVP lock-ins.
+- [x] Managed-runtime trigger + fallback chain is deterministic and auditable.
+- [x] No unresolved high-severity risks in runtime orchestration scope.
 
 ## 11) Out of Scope for This Todo
 

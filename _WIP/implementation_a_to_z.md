@@ -80,13 +80,13 @@ Done when: transient failure recovery works and irrecoverable jobs are visible f
 - [x] **R — Run** managed-runtime PTY adapter (tmux first).
 Done when: supervisor can launch, target, and health-check role-specific tmux panes.
 
-- [ ] **S — Safeguard** collision, loop, and rate-control policies.
+- [x] **S — Safeguard** collision, loop, and rate-control policies.
 Done when: busy-pane defer policy, loop auto-block, and rate limits are all enforced and test-covered.
 
 - [ ] **T — Telemetry** baseline (logs, metrics, health/readiness, correlation IDs).
 Done when: API and worker expose actionable metrics and structured audit-ready logs.
 
-- [ ] **U — Unblock** fallback chain (`live trigger -> resume -> spawn`) and failure classification.
+- [x] **U — Unblock** fallback chain (`live trigger -> resume -> spawn`) and failure classification.
 Done when: timeout/retry exhaustion deterministically selects fallback path and emits correct reason codes.
 
 - [ ] **V — Validate** end-to-end integration scenarios.
@@ -108,7 +108,7 @@ Done when: go-live checklist is signed off with known risks, rollback plan, and 
 
 - [x] 1. Complete **A, B, C, D, E** first (platform foundation).
 - [x] 2. Then complete **F, G, H, I, J, K, L, M** (core product surface).
-- [ ] 3. Then complete **N, O, P, Q, R, S, U** (runtime orchestration reliability).
+- [x] 3. Then complete **N, O, P, Q, R, S, U** (runtime orchestration reliability).
 - [ ] 4. Finish with **T, V, W, X, Y, Z** (operations, validation, launch readiness).
 
 ## Non-Goals in This File

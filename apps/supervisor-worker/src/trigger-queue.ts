@@ -1,5 +1,5 @@
 import type { DbClient } from "@orkiva/db";
-import { triggerAttempts, triggerJobs } from "@orkiva/db";
+import { threads, triggerAttempts, triggerJobs } from "@orkiva/db";
 import { and, asc, eq, inArray, isNull, lte, or } from "drizzle-orm";
 
 export type TriggerJobStatus =
@@ -90,6 +90,7 @@ export interface TriggerQueueStore {
     limit: number;
   }): Promise<readonly TriggerJobRecord[]>;
   getJobById(triggerId: string): Promise<TriggerJobRecord | null>;
+  markThreadBlocked(input: { threadId: string; blockedAt: Date; reason: string }): Promise<boolean>;
 }
 
 const toTransitionStatusForRetry = (attemptResult: TriggerAttemptResult): TriggerJobStatus => {
@@ -107,8 +108,25 @@ const toTransitionStatusForRetry = (attemptResult: TriggerAttemptResult): Trigge
 export interface TriggerExecutionOutcome {
   attemptResult: TriggerAttemptResult;
   retryable: boolean;
+  retryAfterMs?: number;
   errorCode?: string;
   details?: Record<string, unknown>;
+}
+
+export interface TriggerFallbackOutcome {
+  attemptResult: "fallback_resume_succeeded" | "fallback_resume_failed" | "fallback_spawned";
+  nextStatus: TriggerJobStatus;
+  errorCode?: string;
+  details?: Record<string, unknown>;
+}
+
+export interface TriggerFallbackExecutor {
+  execute(input: {
+    job: TriggerJobRecord;
+    attemptNo: number;
+    initialOutcome: TriggerExecutionOutcome;
+    now: Date;
+  }): Promise<TriggerFallbackOutcome>;
 }
 
 export interface TriggerJobExecutor {
@@ -134,6 +152,29 @@ export class NotImplementedTriggerJobExecutor implements TriggerJobExecutor {
   }
 }
 
+export class NoopTriggerFallbackExecutor implements TriggerFallbackExecutor {
+  public execute(input: {
+    job: TriggerJobRecord;
+    attemptNo: number;
+    initialOutcome: TriggerExecutionOutcome;
+    now: Date;
+  }): Promise<TriggerFallbackOutcome> {
+    return Promise.resolve({
+      attemptResult: "fallback_resume_failed",
+      nextStatus: "failed",
+      errorCode: input.initialOutcome.errorCode ?? "FALLBACK_NOT_IMPLEMENTED",
+      details: {
+        triggerId: input.job.triggerId,
+        attemptNo: input.attemptNo,
+        ...(input.initialOutcome.details === undefined
+          ? {}
+          : { initialOutcome: input.initialOutcome.details }),
+        now: input.now.toISOString()
+      }
+    });
+  }
+}
+
 export interface TriggerQueueProcessingResult {
   workspaceId: string;
   processedAt: Date;
@@ -142,13 +183,42 @@ export interface TriggerQueueProcessingResult {
   retried: number;
   deadLettered: number;
   failed: number;
+  fallbackResumed: number;
+  fallbackSpawned: number;
+  autoBlocked: number;
   deadLetterJobIds: readonly string[];
 }
 
+export interface TriggerQueueSafeguardsConfig {
+  deferRecheckMs: number;
+  rateLimitPerMinute: number;
+  loopMaxTurns: number;
+  loopMaxRepeatedFindings: number;
+}
+
+const DEFAULT_TRIGGER_QUEUE_SAFEGUARDS: TriggerQueueSafeguardsConfig = {
+  deferRecheckMs: 5_000,
+  rateLimitPerMinute: 10,
+  loopMaxTurns: 20,
+  loopMaxRepeatedFindings: 3
+};
+
 export class TriggerQueueProcessor {
+  private readonly rateLimitEvents = new Map<string, Date[]>();
+  private readonly threadLoopState = new Map<
+    string,
+    {
+      noProgressTurns: number;
+      repeatedErrorCode: string | null;
+      repeatedFindingCycles: number;
+    }
+  >();
+
   public constructor(
     private readonly store: TriggerQueueStore,
     private readonly executor: TriggerJobExecutor,
+    private readonly fallbackExecutor: TriggerFallbackExecutor = new NoopTriggerFallbackExecutor(),
+    private readonly safeguards: TriggerQueueSafeguardsConfig = DEFAULT_TRIGGER_QUEUE_SAFEGUARDS,
     private readonly backoffBaseMs = 2000,
     private readonly backoffMaxMs = 60000
   ) {}
@@ -156,6 +226,91 @@ export class TriggerQueueProcessor {
   private computeBackoffMs(attemptNo: number): number {
     const raw = this.backoffBaseMs * 2 ** Math.max(attemptNo - 1, 0);
     return Math.min(raw, this.backoffMaxMs);
+  }
+
+  private rateLimitKey(job: TriggerJobRecord): string {
+    return `${job.workspaceId}:${job.threadId}:${job.targetAgentId}`;
+  }
+
+  private applyRateLimit(job: TriggerJobRecord, now: Date): TriggerExecutionOutcome | null {
+    const key = this.rateLimitKey(job);
+    const windowStart = now.getTime() - 60_000;
+    const existing = this.rateLimitEvents.get(key) ?? [];
+    const recent = existing.filter((eventAt) => eventAt.getTime() >= windowStart);
+    if (recent.length >= this.safeguards.rateLimitPerMinute) {
+      const oldest = recent[0];
+      const retryAfterMs =
+        oldest === undefined
+          ? this.safeguards.deferRecheckMs
+          : oldest.getTime() + 60_000 - now.getTime();
+      this.rateLimitEvents.set(key, recent);
+      return {
+        attemptResult: "deferred",
+        retryable: true,
+        retryAfterMs: Math.max(retryAfterMs, this.safeguards.deferRecheckMs),
+        errorCode: "TRIGGER_RATE_LIMITED",
+        details: {
+          rateLimitPerMinute: this.safeguards.rateLimitPerMinute
+        }
+      };
+    }
+
+    this.rateLimitEvents.set(key, [...recent, now]);
+    return null;
+  }
+
+  private clearLoopState(threadId: string): void {
+    this.threadLoopState.delete(threadId);
+  }
+
+  private updateLoopState(input: { threadId: string; outcome: TriggerExecutionOutcome }): {
+    shouldAutoBlock: boolean;
+    reason: string | null;
+  } {
+    const isProgress =
+      input.outcome.attemptResult === "delivered" ||
+      input.outcome.attemptResult === "fallback_resume_succeeded" ||
+      input.outcome.attemptResult === "fallback_spawned";
+    if (isProgress) {
+      this.clearLoopState(input.threadId);
+      return {
+        shouldAutoBlock: false,
+        reason: null
+      };
+    }
+
+    const previous = this.threadLoopState.get(input.threadId) ?? {
+      noProgressTurns: 0,
+      repeatedErrorCode: null,
+      repeatedFindingCycles: 0
+    };
+    const nextNoProgressTurns = previous.noProgressTurns + 1;
+    const errorCode = input.outcome.errorCode ?? "UNKNOWN_TRIGGER_ERROR";
+    const nextRepeatedFindingCycles =
+      previous.repeatedErrorCode === errorCode ? previous.repeatedFindingCycles + 1 : 1;
+    this.threadLoopState.set(input.threadId, {
+      noProgressTurns: nextNoProgressTurns,
+      repeatedErrorCode: errorCode,
+      repeatedFindingCycles: nextRepeatedFindingCycles
+    });
+
+    if (nextNoProgressTurns >= this.safeguards.loopMaxTurns) {
+      return {
+        shouldAutoBlock: true,
+        reason: `no_progress_turns:${nextNoProgressTurns}`
+      };
+    }
+    if (nextRepeatedFindingCycles >= this.safeguards.loopMaxRepeatedFindings) {
+      return {
+        shouldAutoBlock: true,
+        reason: `repeated_identical_findings:${nextRepeatedFindingCycles}:${errorCode}`
+      };
+    }
+
+    return {
+      shouldAutoBlock: false,
+      reason: null
+    };
   }
 
   public async processDueJobs(input: {
@@ -174,41 +329,109 @@ export class TriggerQueueProcessor {
     let retried = 0;
     let deadLettered = 0;
     let failed = 0;
+    let fallbackResumed = 0;
+    let fallbackSpawned = 0;
+    let autoBlocked = 0;
 
     for (const job of claimedJobs) {
       const attemptNo = job.attempts + 1;
-      const outcome = await this.executor.execute({
-        job,
-        attemptNo,
-        now: processedAt
-      });
+      const rateLimitedOutcome = this.applyRateLimit(job, processedAt);
+      const outcome =
+        rateLimitedOutcome ??
+        (await this.executor.execute({
+          job,
+          attemptNo,
+          now: processedAt
+        }));
 
-      const shouldRetry = outcome.retryable && attemptNo <= job.maxRetries;
-      const nextStatus: TriggerJobStatus =
+      const shouldRetry =
+        outcome.attemptResult === "deferred"
+          ? outcome.retryable
+          : outcome.retryable && attemptNo <= job.maxRetries;
+      let finalOutcome: TriggerExecutionOutcome = outcome;
+      let nextStatus: TriggerJobStatus =
         outcome.attemptResult === "delivered"
           ? "delivered"
           : shouldRetry
             ? toTransitionStatusForRetry(outcome.attemptResult)
             : "failed";
-      const nextRetryAt =
+      let nextRetryAt =
         outcome.attemptResult === "delivered" || !shouldRetry
           ? null
-          : new Date(processedAt.getTime() + this.computeBackoffMs(attemptNo));
+          : new Date(
+              processedAt.getTime() +
+                (outcome.attemptResult === "deferred"
+                  ? (outcome.retryAfterMs ?? this.safeguards.deferRecheckMs)
+                  : this.computeBackoffMs(attemptNo))
+            );
+
+      if (!shouldRetry && outcome.attemptResult !== "delivered") {
+        const fallback = await this.fallbackExecutor.execute({
+          job,
+          attemptNo,
+          initialOutcome: outcome,
+          now: processedAt
+        });
+        finalOutcome = {
+          attemptResult: fallback.attemptResult,
+          retryable: false,
+          ...(fallback.errorCode === undefined ? {} : { errorCode: fallback.errorCode }),
+          ...(fallback.details === undefined ? {} : { details: fallback.details })
+        };
+        nextStatus = fallback.nextStatus;
+        nextRetryAt = null;
+      }
+
+      const loopGuard = this.updateLoopState({
+        threadId: job.threadId,
+        outcome: finalOutcome
+      });
+      if (loopGuard.shouldAutoBlock && loopGuard.reason !== null) {
+        const blocked = await this.store.markThreadBlocked({
+          threadId: job.threadId,
+          blockedAt: processedAt,
+          reason: loopGuard.reason
+        });
+        if (blocked) {
+          autoBlocked += 1;
+        }
+        finalOutcome = {
+          attemptResult: "failed",
+          retryable: false,
+          errorCode: "THREAD_AUTO_BLOCKED",
+          details: {
+            threadId: job.threadId,
+            reason: loopGuard.reason
+          }
+        };
+        nextStatus = "failed";
+        nextRetryAt = null;
+      }
 
       await this.store.recordAttemptAndTransition({
         triggerId: job.triggerId,
         attemptNo,
-        attemptResult: outcome.attemptResult,
-        ...(outcome.errorCode === undefined ? {} : { errorCode: outcome.errorCode }),
-        ...(outcome.details === undefined ? {} : { details: outcome.details }),
+        attemptResult: finalOutcome.attemptResult,
+        ...(finalOutcome.errorCode === undefined ? {} : { errorCode: finalOutcome.errorCode }),
+        ...(finalOutcome.details === undefined ? {} : { details: finalOutcome.details }),
         nextStatus,
         nextRetryAt,
         transitionedAt: processedAt
       });
 
-      if (outcome.attemptResult === "delivered") {
+      if (
+        finalOutcome.attemptResult === "delivered" ||
+        finalOutcome.attemptResult === "fallback_resume_succeeded" ||
+        finalOutcome.attemptResult === "fallback_spawned"
+      ) {
         delivered += 1;
-      } else if (shouldRetry) {
+        if (finalOutcome.attemptResult === "fallback_resume_succeeded") {
+          fallbackResumed += 1;
+        }
+        if (finalOutcome.attemptResult === "fallback_spawned") {
+          fallbackSpawned += 1;
+        }
+      } else if (shouldRetry && finalOutcome.attemptResult !== "fallback_resume_failed") {
         retried += 1;
       } else {
         failed += 1;
@@ -231,6 +454,9 @@ export class TriggerQueueProcessor {
       retried,
       deadLettered,
       failed,
+      fallbackResumed,
+      fallbackSpawned,
+      autoBlocked,
       deadLetterJobIds: deadLetter.map((job) => job.triggerId)
     };
   }
@@ -240,6 +466,7 @@ const triggerKey = (triggerId: string): string => triggerId;
 
 export class InMemoryTriggerQueueStore implements TriggerQueueStore {
   private readonly jobs = new Map<string, TriggerJobRecord>();
+  private readonly blockedThreads = new Map<string, { blockedAt: Date; reason: string }>();
   private readonly attemptsByTrigger = new Map<
     string,
     Array<{
@@ -346,6 +573,22 @@ export class InMemoryTriggerQueueStore implements TriggerQueueStore {
 
   public getJobById(triggerId: string): Promise<TriggerJobRecord | null> {
     return Promise.resolve(this.jobs.get(triggerKey(triggerId)) ?? null);
+  }
+
+  public markThreadBlocked(input: {
+    threadId: string;
+    blockedAt: Date;
+    reason: string;
+  }): Promise<boolean> {
+    const existing = this.blockedThreads.get(input.threadId);
+    if (existing !== undefined) {
+      return Promise.resolve(false);
+    }
+    this.blockedThreads.set(input.threadId, {
+      blockedAt: input.blockedAt,
+      reason: input.reason
+    });
+    return Promise.resolve(true);
   }
 }
 
@@ -480,5 +723,24 @@ export class DbTriggerQueueStore implements TriggerQueueStore {
       where: (table) => eq(table.triggerId, triggerId)
     });
     return row === undefined ? null : toTriggerJobRecord(row);
+  }
+
+  public async markThreadBlocked(input: {
+    threadId: string;
+    blockedAt: Date;
+    reason: string;
+  }): Promise<boolean> {
+    void input.reason;
+    const updated = await this.db
+      .update(threads)
+      .set({
+        status: "blocked",
+        updatedAt: input.blockedAt
+      })
+      .where(and(eq(threads.threadId, input.threadId), eq(threads.status, "active")))
+      .returning({
+        threadId: threads.threadId
+      });
+    return updated.length > 0;
   }
 }

@@ -12,6 +12,7 @@ export interface TriggerDeliveryRequest {
   threadId: string;
   reason: string;
   prompt: string;
+  forceOverride: boolean;
 }
 
 export interface TriggerDeliverySuccess {
@@ -22,6 +23,7 @@ export interface TriggerDeliverySuccess {
 export type TriggerDeliveryFailureCode =
   | TriggerPayloadValidationErrorCode
   | "UNSUPPORTED_RUNTIME"
+  | "OPERATOR_BUSY"
   | "TARGET_NOT_FOUND"
   | "PANE_DEAD"
   | "SEND_KEYS_ERROR";

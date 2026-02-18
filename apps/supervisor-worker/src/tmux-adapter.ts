@@ -61,6 +61,7 @@ const toFailure = (
 const splitLines = (value: string): readonly string[] => value.replace(/\n$/, "").split("\n");
 
 const livenessProbeTemplate = "#{pane_dead}|#{pane_pid}|#{pane_current_command}";
+const activityProbeTemplate = "#{session_attached}|#{pane_active}";
 
 export const resolveTmuxTargetFromRuntime = (runtime: string): string | null => {
   const trimmed = runtime.trim();
@@ -139,6 +140,23 @@ export class TmuxTriggerPtyAdapter implements TriggerPtyAdapter {
         panePid: panePid ?? null,
         paneCommand: paneCommand ?? null
       });
+    }
+
+    if (!input.forceOverride) {
+      const activityProbe = await this.commandExecutor.run({
+        command: "tmux",
+        args: ["display-message", "-p", "-t", target, activityProbeTemplate]
+      });
+      if (activityProbe.exitCode === 0) {
+        const [sessionAttached, paneActive] = splitLines(activityProbe.stdout)[0]?.split("|") ?? [];
+        if (sessionAttached === "1" && paneActive === "1") {
+          return toFailure("OPERATOR_BUSY", {
+            target,
+            sessionAttached,
+            paneActive
+          });
+        }
+      }
     }
 
     for (const line of payload.value.envelopeLines) {

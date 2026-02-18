@@ -2,8 +2,9 @@ import { createDb, createDbPool } from "@orkiva/db";
 import { formatConfigValidationError, loadSupervisorWorkerConfig } from "@orkiva/shared";
 
 import { DbRuntimeRegistryStore, RuntimeRegistryService } from "./runtime-registry.js";
+import { CodexFallbackExecutor } from "./runtime-fallback.js";
 import { ManagedRuntimeTriggerJobExecutor } from "./runtime-trigger-executor.js";
-import { TmuxTriggerPtyAdapter } from "./tmux-adapter.js";
+import { NodeCommandExecutor, TmuxTriggerPtyAdapter } from "./tmux-adapter.js";
 import { DbTriggerQueueStore, TriggerQueueProcessor } from "./trigger-queue.js";
 import {
   DbUnreadReconciliationSnapshotStore,
@@ -24,9 +25,32 @@ try {
     new InMemoryUnreadReconciliationStateStore()
   );
   const runtimeRegistryService = new RuntimeRegistryService(runtimeRegistryStore);
+  const commandExecutor = new NodeCommandExecutor();
+  const triggerExecutor = new ManagedRuntimeTriggerJobExecutor(
+    runtimeRegistryStore,
+    new TmuxTriggerPtyAdapter(commandExecutor),
+    {
+      quietWindowMs: config.TRIGGER_QUIET_WINDOW_MS,
+      recheckMs: config.TRIGGER_RECHECK_MS,
+      maxDeferMs: config.TRIGGER_MAX_DEFER_MS
+    }
+  );
+  const fallbackExecutor = new CodexFallbackExecutor(runtimeRegistryStore, commandExecutor, {
+    resumeMaxAttempts: config.TRIGGER_RESUME_MAX_ATTEMPTS,
+    staleAfterHours: config.SESSION_STALE_AFTER_HOURS,
+    crashLoopThreshold: config.LOOP_MAX_REPEATED_FINDINGS,
+    crashLoopWindowMs: 15 * 60 * 1000
+  });
   const triggerQueueProcessor = new TriggerQueueProcessor(
     new DbTriggerQueueStore(db),
-    new ManagedRuntimeTriggerJobExecutor(runtimeRegistryStore, new TmuxTriggerPtyAdapter())
+    triggerExecutor,
+    fallbackExecutor,
+    {
+      deferRecheckMs: config.TRIGGER_RECHECK_MS,
+      rateLimitPerMinute: config.TRIGGER_RATE_LIMIT_PER_MINUTE,
+      loopMaxTurns: config.LOOP_MAX_TURNS,
+      loopMaxRepeatedFindings: config.LOOP_MAX_REPEATED_FINDINGS
+    }
   );
   const workerLoop = new SupervisorWorkerLoop(
     reconciliationService,
@@ -49,7 +73,7 @@ try {
       queueResult.claimedJobs > 0
     ) {
       console.log(
-        `[${service}] tick candidates=${unreadResult.candidates.length} participantsScanned=${unreadResult.stats.participantsScanned} deduplicated=${unreadResult.stats.deduplicatedParticipants} runtimesChecked=${runtimeResult.checkedRuntimes} transitionedOffline=${runtimeResult.transitionedOffline} jobsClaimed=${queueResult.claimedJobs} delivered=${queueResult.delivered} retried=${queueResult.retried} deadLettered=${queueResult.deadLettered}`
+        `[${service}] tick candidates=${unreadResult.candidates.length} participantsScanned=${unreadResult.stats.participantsScanned} deduplicated=${unreadResult.stats.deduplicatedParticipants} runtimesChecked=${runtimeResult.checkedRuntimes} transitionedOffline=${runtimeResult.transitionedOffline} jobsClaimed=${queueResult.claimedJobs} delivered=${queueResult.delivered} retried=${queueResult.retried} fallbackResumed=${queueResult.fallbackResumed} fallbackSpawned=${queueResult.fallbackSpawned} autoBlocked=${queueResult.autoBlocked} deadLettered=${queueResult.deadLettered}`
       );
     } else {
       console.log(

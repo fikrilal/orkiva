@@ -54,7 +54,8 @@ describe("TmuxTriggerPtyAdapter", () => {
       triggerId: "trg_01",
       threadId: "th_01",
       reason: "new_unread_messages",
-      prompt: "continue"
+      prompt: "continue",
+      forceOverride: false
     });
 
     expect(result).toEqual({
@@ -84,7 +85,8 @@ describe("TmuxTriggerPtyAdapter", () => {
       triggerId: "trg_01",
       threadId: "th_01",
       reason: "new_unread_messages",
-      prompt: "continue"
+      prompt: "continue",
+      forceOverride: false
     });
 
     expect(result).toEqual({
@@ -115,7 +117,8 @@ describe("TmuxTriggerPtyAdapter", () => {
       triggerId: "trg_01",
       threadId: "th_01",
       reason: "new_unread_messages",
-      prompt: "continue"
+      prompt: "continue",
+      forceOverride: false
     });
 
     expect(result).toEqual({
@@ -155,7 +158,8 @@ describe("TmuxTriggerPtyAdapter", () => {
       triggerId: "trg_01",
       threadId: "th_01",
       reason: "new_unread_messages",
-      prompt: "line-1\nline-2"
+      prompt: "line-1\nline-2",
+      forceOverride: false
     });
 
     expect(result).toEqual({
@@ -222,12 +226,80 @@ describe("TmuxTriggerPtyAdapter", () => {
       triggerId: "trg_01",
       threadId: "th_01",
       reason: "new_unread_messages",
-      prompt: "continue"
+      prompt: "continue",
+      forceOverride: false
     });
 
     expect(result).toEqual({
       delivered: false,
       errorCode: "SEND_KEYS_ERROR",
+      details: {
+        target: "agents_mobile_core:reviewer.0"
+      }
+    });
+  });
+
+  it("returns operator-busy unless force override is enabled", async () => {
+    const run = vi.fn((input: CommandExecutionInput) => {
+      if (
+        input.args[0] === "display-message" &&
+        input.args[4] === "#{pane_dead}|#{pane_pid}|#{pane_current_command}"
+      ) {
+        return Promise.resolve({
+          exitCode: 0,
+          stdout: "0|1234|codex\n",
+          stderr: ""
+        });
+      }
+      if (
+        input.args[0] === "display-message" &&
+        input.args[4] === "#{session_attached}|#{pane_active}"
+      ) {
+        return Promise.resolve({
+          exitCode: 0,
+          stdout: "1|1\n",
+          stderr: ""
+        });
+      }
+      return Promise.resolve({
+        exitCode: 0,
+        stdout: "",
+        stderr: ""
+      });
+    });
+    const commandExecutor: CommandExecutor = {
+      run
+    };
+    const adapter = new TmuxTriggerPtyAdapter(commandExecutor);
+
+    const busy = await adapter.deliver({
+      runtime: runtimeRecord("tmux:agents_mobile_core:reviewer.0"),
+      triggerId: "trg_01",
+      threadId: "th_01",
+      reason: "new_unread_messages",
+      prompt: "continue",
+      forceOverride: false
+    });
+    expect(busy).toEqual({
+      delivered: false,
+      errorCode: "OPERATOR_BUSY",
+      details: {
+        target: "agents_mobile_core:reviewer.0",
+        sessionAttached: "1",
+        paneActive: "1"
+      }
+    });
+
+    const override = await adapter.deliver({
+      runtime: runtimeRecord("tmux:agents_mobile_core:reviewer.0"),
+      triggerId: "trg_01",
+      threadId: "th_01",
+      reason: "human_override:urgent",
+      prompt: "continue",
+      forceOverride: true
+    });
+    expect(override).toEqual({
+      delivered: true,
       details: {
         target: "agents_mobile_core:reviewer.0"
       }

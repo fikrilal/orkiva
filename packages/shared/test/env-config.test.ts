@@ -31,6 +31,7 @@ describe("runtime config contract", () => {
     expect(config.WORKER_POLL_INTERVAL_MS).toBe(5000);
     expect(config.WORKER_MAX_PARALLEL_JOBS).toBe(10);
     expect(config.TRIGGER_QUIET_WINDOW_MS).toBe(20000);
+    expect(config.TRIGGER_RATE_LIMIT_PER_MINUTE).toBe(10);
   });
 
   it("fails fast when required env is missing", () => {
