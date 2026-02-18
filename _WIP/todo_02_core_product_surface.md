@@ -144,28 +144,28 @@ Done when:
 
 ## 6) Keep (K) — Idempotency and Retry-Safe Writes
 
-- [ ] Enforce idempotency on `post_message` using `(thread_id, sender_agent_id, idempotency_key)`.
-- [ ] Return original persisted result for duplicate keys (no double write).
-- [ ] Ensure behavior under transient retry/concurrent duplicate request races.
-- [ ] Add concurrency-focused integration tests for duplicate key semantics.
+- [x] Enforce idempotency on `post_message` using `(thread_id, sender_agent_id, idempotency_key)`.
+- [x] Return original persisted result for duplicate keys (no double write).
+- [x] Ensure behavior under transient retry/concurrent duplicate request races.
+- [x] Add concurrency-focused integration tests for duplicate key semantics.
 
 Done when:
-- [ ] Duplicate submit behavior is deterministic and side-effect safe.
+- [x] Duplicate submit behavior is deterministic and side-effect safe.
 
 ## 7) Lock (L) — Governance Authority in Code Paths
 
-- [ ] Enforce authority rules in `update_thread_status`:
+- [x] Enforce authority rules in `update_thread_status`:
   - worker role cannot force-close disputed threads
   - coordinator/human override path requires explicit reason
-- [ ] Add conflict handling for competing status updates (`CONFLICT` path).
-- [ ] Emit audit events for critical operations:
+- [x] Add conflict handling for competing status updates (`CONFLICT` path).
+- [x] Emit audit events for critical operations:
   - status transitions
   - auth failures
   - authority rejections
-- [ ] Add tests for authority and dispute scenarios.
+- [x] Add tests for authority and dispute scenarios.
 
 Done when:
-- [ ] Governance rules are executable constraints, not documentation-only policy.
+- [x] Governance rules are executable constraints, not documentation-only policy.
 
 ## 8) Manage (M) — Session Registry and Heartbeat Lifecycle
 
@@ -219,7 +219,8 @@ Done when:
 - [x] Then Phase 3 (H): implement token verification and authorization helpers in `packages/auth`.
 - [x] Then Phase 4 (I): wire `bridge-api` runtime skeleton and thread APIs.
 - [x] Then Phase 5 (J): implement message MCP methods (`post_message`, `read_messages`, `ack_read`).
-- [ ] Then Phase 6 (K): enforce idempotency race/concurrency semantics and retry-safety.
+- [x] Then Phase 6 (K): enforce idempotency race/concurrency semantics and retry-safety.
+- [x] Then Phase 7 (L): enforce governance authority and conflict/audit policy paths.
 
 Reason:
 - Contract-first + domain-first sequencing reduces API churn and rework.

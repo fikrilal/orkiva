@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it } from "vitest";
 
 import { AuthError, type VerifiedAuthClaims } from "@orkiva/auth";
+import type { ThreadStatus } from "@orkiva/domain";
 import {
   ackReadOutputSchema,
   createThreadOutputSchema,
@@ -13,7 +14,32 @@ import {
 } from "@orkiva/protocol";
 
 import { createBridgeApiApp } from "./app.js";
-import { InMemoryThreadStore } from "./thread-store.js";
+import { InMemoryAuditStore } from "./audit-store.js";
+import { InMemoryThreadStore, type ThreadRecord } from "./thread-store.js";
+
+class ConflictOnSecondStatusUpdateStore extends InMemoryThreadStore {
+  private successfulStatusUpdates = 0;
+
+  public override async updateThreadStatus(
+    threadId: string,
+    nextStatus: ThreadStatus,
+    updatedAt: Date,
+    options?: {
+      expectedCurrentStatus?: ThreadStatus;
+    }
+  ): Promise<ThreadRecord | null> {
+    if (this.successfulStatusUpdates >= 1) {
+      return null;
+    }
+
+    const updated = await super.updateThreadStatus(threadId, nextStatus, updatedAt, options);
+    if (updated !== null) {
+      this.successfulStatusUpdates += 1;
+    }
+
+    return updated;
+  }
+}
 
 const nowIso = "2026-02-18T08:30:00.000Z";
 
@@ -39,11 +65,15 @@ const tokenMap: Readonly<Record<string, VerifiedAuthClaims>> = {
   coordinator_wk2: makeClaims("coordinator", "wk_02", "coord_other")
 };
 
-const createTestApp = () => {
+const createTestApp = (options?: {
+  auditStore?: InMemoryAuditStore;
+  threadStore?: InMemoryThreadStore;
+}) => {
   let idCounter = 0;
 
   return createBridgeApiApp({
-    threadStore: new InMemoryThreadStore(),
+    threadStore: options?.threadStore ?? new InMemoryThreadStore(),
+    ...(options?.auditStore === undefined ? {} : { auditStore: options.auditStore }),
     verifyAccessToken: (token) => {
       const claims = tokenMap[token];
       if (!claims) {
@@ -263,6 +293,125 @@ describe("bridge-api phase 4-5", () => {
     expect(invalidResponse.statusCode).toBe(409);
     const payload = protocolErrorResponseSchema.parse(invalidResponse.json());
     expect(payload.error.code).toBe("INVALID_THREAD_TRANSITION");
+  });
+
+  it("requires explicit override reason to close a blocked thread", async () => {
+    const app = createTestApp();
+    appsToClose.push(app);
+
+    await app.inject({
+      method: "POST",
+      url: "/v1/mcp/create_thread",
+      headers: {
+        authorization: "Bearer coordinator_wk1"
+      },
+      payload: {
+        workspace_id: "wk_01",
+        title: "override reason thread",
+        type: "workflow",
+        participants: ["participant_agent"]
+      }
+    });
+
+    const blocked = await app.inject({
+      method: "POST",
+      url: "/v1/mcp/update_thread_status",
+      headers: {
+        authorization: "Bearer coordinator_wk1"
+      },
+      payload: {
+        thread_id: "th_fixed-id",
+        status: "blocked",
+        reason: "waiting_review"
+      }
+    });
+    expect(blocked.statusCode).toBe(200);
+
+    const noOverride = await app.inject({
+      method: "POST",
+      url: "/v1/mcp/update_thread_status",
+      headers: {
+        authorization: "Bearer coordinator_wk1"
+      },
+      payload: {
+        thread_id: "th_fixed-id",
+        status: "closed",
+        reason: "manual_close"
+      }
+    });
+    expect(noOverride.statusCode).toBe(403);
+    const noOverridePayload = protocolErrorResponseSchema.parse(noOverride.json());
+    expect(noOverridePayload.error.code).toBe("FORBIDDEN");
+
+    const withOverride = await app.inject({
+      method: "POST",
+      url: "/v1/mcp/update_thread_status",
+      headers: {
+        authorization: "Bearer coordinator_wk1"
+      },
+      payload: {
+        thread_id: "th_fixed-id",
+        status: "closed",
+        reason: "coordinator_override:human_approved"
+      }
+    });
+    expect(withOverride.statusCode).toBe(200);
+    updateThreadStatusOutputSchema.parse(withOverride.json());
+  });
+
+  it("returns conflict for competing status updates", async () => {
+    const app = createTestApp({
+      threadStore: new ConflictOnSecondStatusUpdateStore()
+    });
+    appsToClose.push(app);
+
+    await app.inject({
+      method: "POST",
+      url: "/v1/mcp/create_thread",
+      headers: {
+        authorization: "Bearer coordinator_wk1"
+      },
+      payload: {
+        workspace_id: "wk_01",
+        title: "status conflict thread",
+        type: "workflow",
+        participants: ["participant_agent"]
+      }
+    });
+
+    const [left, right] = await Promise.all([
+      app.inject({
+        method: "POST",
+        url: "/v1/mcp/update_thread_status",
+        headers: {
+          authorization: "Bearer coordinator_wk1"
+        },
+        payload: {
+          thread_id: "th_fixed-id",
+          status: "blocked",
+          reason: "waiting_review"
+        }
+      }),
+      app.inject({
+        method: "POST",
+        url: "/v1/mcp/update_thread_status",
+        headers: {
+          authorization: "Bearer coordinator_wk1"
+        },
+        payload: {
+          thread_id: "th_fixed-id",
+          status: "resolved",
+          reason: "all_findings_verified"
+        }
+      })
+    ]);
+
+    const statusCodes = [left.statusCode, right.statusCode].sort((a, b) => a - b);
+    expect(statusCodes).toStrictEqual([200, 409]);
+
+    const conflictResponse = left.statusCode === 409 ? left : right;
+    const conflictPayload = protocolErrorResponseSchema.parse(conflictResponse.json());
+    expect(conflictPayload.error.code).toBe("CONFLICT");
   });
 
   it("summarizes thread with read access", async () => {
@@ -488,6 +637,149 @@ describe("bridge-api phase 4-5", () => {
     expect(conflictPayload.error.code).toBe("IDEMPOTENCY_CONFLICT");
   });
 
+  it("handles concurrent duplicate post_message retries without duplicate writes", async () => {
+    const app = createTestApp();
+    appsToClose.push(app);
+
+    await app.inject({
+      method: "POST",
+      url: "/v1/mcp/create_thread",
+      headers: {
+        authorization: "Bearer coordinator_wk1"
+      },
+      payload: {
+        workspace_id: "wk_01",
+        title: "concurrent idempotency thread",
+        type: "workflow",
+        participants: ["participant_agent"]
+      }
+    });
+
+    const requestPayload = {
+      thread_id: "th_fixed-id",
+      schema_version: 1,
+      kind: "chat" as const,
+      body: "parallel payload",
+      idempotency_key: "idem_parallel_01"
+    };
+
+    const [left, right] = await Promise.all([
+      app.inject({
+        method: "POST",
+        url: "/v1/mcp/post_message",
+        headers: {
+          authorization: "Bearer participant_wk1"
+        },
+        payload: requestPayload
+      }),
+      app.inject({
+        method: "POST",
+        url: "/v1/mcp/post_message",
+        headers: {
+          authorization: "Bearer participant_wk1"
+        },
+        payload: requestPayload
+      })
+    ]);
+
+    expect(left.statusCode).toBe(200);
+    expect(right.statusCode).toBe(200);
+    const leftPayload = postMessageOutputSchema.parse(left.json());
+    const rightPayload = postMessageOutputSchema.parse(right.json());
+    expect(leftPayload.message_id).toBe(rightPayload.message_id);
+    expect(leftPayload.seq).toBe(rightPayload.seq);
+
+    const readBack = await app.inject({
+      method: "POST",
+      url: "/v1/mcp/read_messages",
+      headers: {
+        authorization: "Bearer participant_wk1"
+      },
+      payload: {
+        thread_id: "th_fixed-id",
+        since_seq: 0,
+        limit: 10
+      }
+    });
+    expect(readBack.statusCode).toBe(200);
+    const readPayload = readMessagesOutputSchema.parse(readBack.json());
+    expect(readPayload.messages).toHaveLength(1);
+    expect(readPayload.messages[0]?.body).toBe("parallel payload");
+  });
+
+  it("retries concurrent non-idempotent writes and preserves monotonic sequencing", async () => {
+    const app = createTestApp();
+    appsToClose.push(app);
+
+    await app.inject({
+      method: "POST",
+      url: "/v1/mcp/create_thread",
+      headers: {
+        authorization: "Bearer coordinator_wk1"
+      },
+      payload: {
+        workspace_id: "wk_01",
+        title: "concurrent sequencing thread",
+        type: "workflow",
+        participants: ["participant_agent"]
+      }
+    });
+
+    const [first, second] = await Promise.all([
+      app.inject({
+        method: "POST",
+        url: "/v1/mcp/post_message",
+        headers: {
+          authorization: "Bearer participant_wk1"
+        },
+        payload: {
+          thread_id: "th_fixed-id",
+          schema_version: 1,
+          kind: "chat",
+          body: "parallel-one"
+        }
+      }),
+      app.inject({
+        method: "POST",
+        url: "/v1/mcp/post_message",
+        headers: {
+          authorization: "Bearer participant_wk1"
+        },
+        payload: {
+          thread_id: "th_fixed-id",
+          schema_version: 1,
+          kind: "chat",
+          body: "parallel-two"
+        }
+      })
+    ]);
+
+    expect(first.statusCode).toBe(200);
+    expect(second.statusCode).toBe(200);
+    const firstPayload = postMessageOutputSchema.parse(first.json());
+    const secondPayload = postMessageOutputSchema.parse(second.json());
+    const seqs = [firstPayload.seq, secondPayload.seq].sort((a, b) => a - b);
+    expect(seqs).toStrictEqual([1, 2]);
+
+    const readBack = await app.inject({
+      method: "POST",
+      url: "/v1/mcp/read_messages",
+      headers: {
+        authorization: "Bearer participant_wk1"
+      },
+      payload: {
+        thread_id: "th_fixed-id",
+        since_seq: 0,
+        limit: 10
+      }
+    });
+    expect(readBack.statusCode).toBe(200);
+    const readPayload = readMessagesOutputSchema.parse(readBack.json());
+    expect(readPayload.messages).toHaveLength(2);
+    expect(readPayload.messages[0]?.seq).toBe(1);
+    expect(readPayload.messages[1]?.seq).toBe(2);
+  });
+
   it("rejects sender identity mismatch hints for post_message", async () => {
     const app = createTestApp();
     appsToClose.push(app);
@@ -648,5 +940,92 @@ describe("bridge-api phase 4-5", () => {
     expect(response.statusCode).toBe(400);
     const payload = protocolErrorResponseSchema.parse(response.json());
     expect(payload.error.code).toBe("INVALID_ARGUMENT");
+  });
+
+  it("emits audit events for auth rejections, authority rejections, and status transitions", async () => {
+    const auditStore = new InMemoryAuditStore();
+    const app = createTestApp({ auditStore });
+    appsToClose.push(app);
+
+    const noAuth = await app.inject({
+      method: "POST",
+      url: "/v1/mcp/create_thread",
+      payload: {
+        workspace_id: "wk_01",
+        title: "audit thread",
+        type: "workflow",
+        participants: ["participant_agent"]
+      }
+    });
+    expect(noAuth.statusCode).toBe(401);
+
+    const created = await app.inject({
+      method: "POST",
+      url: "/v1/mcp/create_thread",
+      headers: {
+        authorization: "Bearer coordinator_wk1"
+      },
+      payload: {
+        workspace_id: "wk_01",
+        title: "audit thread",
+        type: "workflow",
+        participants: ["participant_agent"]
+      }
+    });
+    expect(created.statusCode).toBe(200);
+
+    const authorityRejected = await app.inject({
+      method: "POST",
+      url: "/v1/mcp/update_thread_status",
+      headers: {
+        authorization: "Bearer participant_wk1"
+      },
+      payload: {
+        thread_id: "th_fixed-id",
+        status: "closed",
+        reason: "manual_close"
+      }
+    });
+    expect(authorityRejected.statusCode).toBe(403);
+
+    const transitioned = await app.inject({
+      method: "POST",
+      url: "/v1/mcp/update_thread_status",
+      headers: {
+        authorization: "Bearer coordinator_wk1"
+      },
+      payload: {
+        thread_id: "th_fixed-id",
+        status: "blocked",
+        reason: "waiting_review"
+      }
+    });
+    expect(transitioned.statusCode).toBe(200);
+
+    const authRejectionAudit = auditStore.events.find(
+      (event) => event.operation === "mcp.create_thread" && event.result === "rejected"
+    );
+    expect(authRejectionAudit).toBeDefined();
+
+    const authorityAudit = auditStore.events.find(
+      (event) =>
+        event.operation === "mcp.update_thread_status" &&
+        event.result === "rejected" &&
+        event.actorAgentId === "participant_agent"
+    );
+    expect(authorityAudit).toBeDefined();
+
+    const transitionAudit = auditStore.events.find(
+      (event) =>
+        event.operation === "mcp.update_thread_status" &&
+        event.result === "success" &&
+        event.actorAgentId === "coordinator_agent"
+    );
+    expect(transitionAudit).toBeDefined();
+    expect(transitionAudit?.payload).toMatchObject({
+      from_status: "active",
+      to_status: "blocked",
+      reason: "waiting_review"
+    });
   });
 });

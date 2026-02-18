@@ -35,6 +35,7 @@ import {
 } from "@orkiva/protocol";
 import Fastify, { type FastifyInstance, type FastifyRequest } from "fastify";
 
+import type { AuditEventInput, AuditStore } from "./audit-store.js";
 import type { MessageRecord, ThreadStore } from "./thread-store.js";
 
 type MCPMethodName =
@@ -59,6 +60,7 @@ declare module "fastify" {
 
 export interface BridgeApiAppDependencies {
   threadStore: ThreadStore;
+  auditStore?: AuditStore;
   verifyAccessToken: (token: string) => Promise<VerifiedAuthClaims>;
   now?: () => Date;
   idGenerator?: () => string;
@@ -144,6 +146,14 @@ const hasIssuesArray = (value: unknown): value is { issues: unknown[] } =>
   "issues" in value &&
   Array.isArray((value as { issues?: unknown }).issues);
 
+const hasDatabaseErrorCode = (
+  value: unknown
+): value is { code: string; constraint?: string; detail?: string } =>
+  typeof value === "object" &&
+  value !== null &&
+  "code" in value &&
+  typeof (value as { code?: unknown }).code === "string";
+
 const mapUnknownError = (error: unknown): BridgeApiError => {
   if (error instanceof BridgeApiError) {
     return error;
@@ -163,6 +173,16 @@ const mapUnknownError = (error: unknown): BridgeApiError => {
     });
   }
 
+  if (hasDatabaseErrorCode(error)) {
+    if (error.code === "23505" || error.code === "40001") {
+      return new BridgeApiError("CONFLICT", 409, "Write conflict", {
+        code: error.code,
+        ...(error.constraint === undefined ? {} : { constraint: error.constraint }),
+        ...(error.detail === undefined ? {} : { detail: error.detail })
+      });
+    }
+  }
+
   return new BridgeApiError(
     "INTERNAL",
     500,
@@ -171,6 +191,11 @@ const mapUnknownError = (error: unknown): BridgeApiError => {
 };
 
 const toIso = (value: Date): string => value.toISOString();
+const POST_MESSAGE_MAX_ATTEMPTS = 3;
+const OVERRIDE_REASON_PREFIXES = ["human_override:", "coordinator_override:"] as const;
+
+const hasExplicitOverrideReason = (value: string): boolean =>
+  OVERRIDE_REASON_PREFIXES.some((prefix) => value.startsWith(prefix));
 
 const isIdempotentReplayMatch = (input: {
   schemaVersion: number;
@@ -188,6 +213,48 @@ const isIdempotentReplayMatch = (input: {
     existing.body === input.body &&
     isDeepStrictEqual(existing.metadata ?? undefined, normalizedMetadata) &&
     (existing.inReplyTo ?? undefined) === normalizedInReplyTo;
+};
+
+const toPostMessageOutput = (
+  message: MessageRecord,
+  threadStatus: ThreadStatus
+): ReturnType<typeof postMessageOutputSchema.parse> =>
+  postMessageOutputSchema.parse({
+    message_id: message.messageId,
+    seq: message.seq,
+    thread_status: threadStatus,
+    created_at: toIso(message.createdAt)
+  });
+
+const extractThreadIdFromBody = (request: FastifyRequest): string | undefined => {
+  const body = request.body;
+  if (typeof body !== "object" || body === null) {
+    return undefined;
+  }
+
+  const threadId = (body as Record<string, unknown>)["thread_id"];
+  return typeof threadId === "string" && threadId.trim().length > 0 ? threadId : undefined;
+};
+
+const extractWorkspaceIdFromBody = (request: FastifyRequest): string | undefined => {
+  const body = request.body;
+  if (typeof body !== "object" || body === null) {
+    return undefined;
+  }
+
+  const workspaceId = (body as Record<string, unknown>)["workspace_id"];
+  return typeof workspaceId === "string" && workspaceId.trim().length > 0 ? workspaceId : undefined;
+};
+
+const deriveOperationName = (request: FastifyRequest): string => {
+  if (request.url.startsWith("/v1/mcp/")) {
+    const params = request.params as { method?: unknown };
+    if (typeof params.method === "string" && params.method.trim().length > 0) {
+      return `mcp.${params.method}`;
+    }
+  }
+
+  return `${request.method} ${request.url}`;
 };
 
 const threadRecordToProtocol = (record: {
@@ -214,6 +281,17 @@ const threadRecordToProtocol = (record: {
 export const createBridgeApiApp = (dependencies: BridgeApiAppDependencies): FastifyInstance => {
   const now = dependencies.now ?? (() => new Date());
   const idGenerator = dependencies.idGenerator ?? randomUUID;
+  const writeAuditEvent = async (input: AuditEventInput): Promise<void> => {
+    if (!dependencies.auditStore) {
+      return;
+    }
+
+    try {
+      await dependencies.auditStore.writeEvent(input);
+    } catch {
+      // Audit write failures should not fail request path.
+    }
+  };
 
   const app = Fastify({
     logger: false,
@@ -251,8 +329,29 @@ export const createBridgeApiApp = (dependencies: BridgeApiAppDependencies): Fast
     reply.header("x-request-id", request.id);
   });
 
-  app.setErrorHandler((error, request, reply) => {
+  app.setErrorHandler(async (error, request, reply) => {
     const mapped = mapUnknownError(error);
+    if (mapped.statusCode === 401 || mapped.statusCode === 403) {
+      const threadId = extractThreadIdFromBody(request);
+      const context = request.context;
+      await writeAuditEvent({
+        workspaceId: context?.authClaims.workspaceId ?? extractWorkspaceIdFromBody(request) ?? "unknown",
+        ...(context === undefined ? {} : { actorAgentId: context.authClaims.agentId }),
+        ...(context === undefined ? {} : { actorRole: context.authClaims.role }),
+        operation: deriveOperationName(request),
+        resourceType: threadId === undefined ? "request" : "thread",
+        resourceId: threadId ?? request.url,
+        ...(threadId === undefined ? {} : { threadId }),
+        requestId: request.id,
+        result: "rejected",
+        payload: {
+          error_code: mapped.code,
+          message: mapped.message
+        },
+        createdAt: now()
+      });
+    }
+
     const payload = protocolErrorResponseSchema.parse({
       error: {
         code: mapped.code,
@@ -320,6 +419,18 @@ export const createBridgeApiApp = (dependencies: BridgeApiAppDependencies): Fast
       const input = updateThreadStatusInputSchema.parse(payload);
       const { authClaims } = requireContext(request);
 
+      if (authClaims.role === "participant" && input.status === "closed") {
+        throw new BridgeApiError(
+          "FORBIDDEN",
+          403,
+          "Worker role cannot force-close disputed threads",
+          {
+            role: authClaims.role,
+            requested_status: input.status
+          }
+        );
+      }
+
       authorizeOperation(authClaims.role, "thread:manage");
       if (input.agent_id !== undefined) {
         assertPayloadIdentityMatchesClaims(authClaims, { agent_id: input.agent_id });
@@ -331,15 +442,60 @@ export const createBridgeApiApp = (dependencies: BridgeApiAppDependencies): Fast
       }
 
       assertWorkspaceBoundary(authClaims, existing.workspaceId);
+      const isDisputedClose = existing.status === "blocked" && input.status === "closed";
+      if (isDisputedClose && !hasExplicitOverrideReason(input.reason)) {
+        throw new BridgeApiError(
+          "FORBIDDEN",
+          403,
+          "Closing a blocked thread requires explicit coordinator/human override reason",
+          {
+            required_reason_prefixes: [...OVERRIDE_REASON_PREFIXES],
+            reason: input.reason,
+            current_status: existing.status,
+            requested_status: input.status
+          }
+        );
+      }
 
       const updated = await dependencies.threadStore.updateThreadStatus(
         input.thread_id,
         input.status,
-        now()
+        now(),
+        {
+          expectedCurrentStatus: existing.status
+        }
       );
       if (!updated) {
-        throw new BridgeApiError("NOT_FOUND", 404, `Thread not found: ${input.thread_id}`);
+        const latest = await dependencies.threadStore.getThreadById(input.thread_id);
+        if (!latest) {
+          throw new BridgeApiError("NOT_FOUND", 404, `Thread not found: ${input.thread_id}`);
+        }
+
+        throw new BridgeApiError("CONFLICT", 409, "Thread status changed by a concurrent update", {
+          thread_id: input.thread_id,
+          expected_status: existing.status,
+          current_status: latest.status
+        });
       }
+
+      await writeAuditEvent({
+        workspaceId: authClaims.workspaceId,
+        actorAgentId: authClaims.agentId,
+        actorRole: authClaims.role,
+        operation: "mcp.update_thread_status",
+        resourceType: "thread",
+        resourceId: updated.threadId,
+        threadId: updated.threadId,
+        requestId: request.id,
+        result: "success",
+        payload: {
+          from_status: existing.status,
+          to_status: updated.status,
+          reason: input.reason,
+          ...(input.metadata === undefined ? {} : { metadata: input.metadata })
+        },
+        createdAt: now()
+      });
 
       return updateThreadStatusOutputSchema.parse({
         thread_id: updated.threadId,
@@ -434,37 +590,78 @@ export const createBridgeApiApp = (dependencies: BridgeApiAppDependencies): Fast
             );
           }
 
-          return postMessageOutputSchema.parse({
-            message_id: existingMessage.messageId,
-            seq: existingMessage.seq,
-            thread_status: existingThread.status,
-            created_at: toIso(existingMessage.createdAt)
-          });
+          return toPostMessageOutput(existingMessage, existingThread.status);
         }
       }
 
-      const latestSeq = await dependencies.threadStore.getLatestMessageSeq(input.thread_id);
-      const nextSeq = getNextMessageSequence(latestSeq);
-      const created = await dependencies.threadStore.createMessage({
-        messageId: `msg_${idGenerator()}`,
-        threadId: input.thread_id,
-        schemaVersion: input.schema_version,
-        seq: nextSeq,
-        senderAgentId: authClaims.agentId,
-        senderSessionId: authClaims.sessionId,
-        kind: input.kind,
-        body: input.body,
-        ...(input.metadata === undefined ? {} : { metadata: input.metadata }),
-        ...(input.in_reply_to === undefined ? {} : { inReplyTo: input.in_reply_to }),
-        ...(input.idempotency_key === undefined ? {} : { idempotencyKey: input.idempotency_key }),
-        createdAt: now()
-      });
+      for (let attempt = 1; attempt <= POST_MESSAGE_MAX_ATTEMPTS; attempt += 1) {
+        const latestSeq = await dependencies.threadStore.getLatestMessageSeq(input.thread_id);
+        const nextSeq = getNextMessageSequence(latestSeq);
 
-      return postMessageOutputSchema.parse({
-        message_id: created.messageId,
-        seq: created.seq,
-        thread_status: existingThread.status,
-        created_at: toIso(created.createdAt)
+        try {
+          const created = await dependencies.threadStore.createMessage({
+            messageId: `msg_${idGenerator()}`,
+            threadId: input.thread_id,
+            schemaVersion: input.schema_version,
+            seq: nextSeq,
+            senderAgentId: authClaims.agentId,
+            senderSessionId: authClaims.sessionId,
+            kind: input.kind,
+            body: input.body,
+            ...(input.metadata === undefined ? {} : { metadata: input.metadata }),
+            ...(input.in_reply_to === undefined ? {} : { inReplyTo: input.in_reply_to }),
+            ...(input.idempotency_key === undefined
+              ? {}
+              : { idempotencyKey: input.idempotency_key }),
+            createdAt: now()
+          });
+
+          return toPostMessageOutput(created, existingThread.status);
+        } catch (error) {
+          if (input.idempotency_key !== undefined) {
+            const concurrentMessage = await dependencies.threadStore.getMessageByIdempotency(
+              input.thread_id,
+              authClaims.agentId,
+              input.idempotency_key
+            );
+            if (concurrentMessage) {
+              const replayMatcher = isIdempotentReplayMatch({
+                schemaVersion: input.schema_version,
+                kind: input.kind,
+                body: input.body,
+                ...(input.metadata === undefined ? {} : { metadata: input.metadata }),
+                ...(input.in_reply_to === undefined ? {} : { inReplyTo: input.in_reply_to })
+              });
+
+              if (!replayMatcher(concurrentMessage)) {
+                throw new BridgeApiError(
+                  "IDEMPOTENCY_CONFLICT",
+                  409,
+                  "Idempotency key is already used with a different payload",
+                  {
+                    thread_id: input.thread_id,
+                    sender_agent_id: authClaims.agentId,
+                    idempotency_key: input.idempotency_key
+                  }
+                );
+              }
+
+              return toPostMessageOutput(concurrentMessage, existingThread.status);
+            }
+          }
+
+          const mapped = mapUnknownError(error);
+          if (mapped.code === "CONFLICT" && attempt < POST_MESSAGE_MAX_ATTEMPTS) {
+            continue;
+          }
+
+          throw error;
+        }
+      }
+
+      throw new BridgeApiError("CONFLICT", 409, "Unable to persist message after bounded retries", {
+        thread_id: input.thread_id,
+        max_attempts: POST_MESSAGE_MAX_ATTEMPTS
       });
     },
     read_messages: async (payload, request) => {

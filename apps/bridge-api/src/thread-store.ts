@@ -88,7 +88,10 @@ export interface ThreadStore {
   updateThreadStatus(
     threadId: string,
     nextStatus: ThreadStatus,
-    updatedAt: Date
+    updatedAt: Date,
+    options?: {
+      expectedCurrentStatus?: ThreadStatus;
+    }
   ): Promise<ThreadRecord | null>;
   summarizeThread(threadId: string, maxMessages: number): Promise<ThreadSummary | null>;
   createMessage(input: CreateMessageRecordInput): Promise<MessageRecord>;
@@ -197,10 +200,19 @@ export class InMemoryThreadStore implements ThreadStore {
   public updateThreadStatus(
     threadId: string,
     nextStatus: ThreadStatus,
-    updatedAt: Date
+    updatedAt: Date,
+    options?: {
+      expectedCurrentStatus?: ThreadStatus;
+    }
   ): Promise<ThreadRecord | null> {
     const existing = this.threadRecords.get(threadId);
     if (!existing) {
+      return Promise.resolve(null);
+    }
+    if (
+      options?.expectedCurrentStatus !== undefined &&
+      existing.status !== options.expectedCurrentStatus
+    ) {
       return Promise.resolve(null);
     }
 
@@ -431,7 +443,10 @@ export class DbThreadStore implements ThreadStore {
   public async updateThreadStatus(
     threadId: string,
     nextStatus: ThreadStatus,
-    updatedAt: Date
+    updatedAt: Date,
+    options?: {
+      expectedCurrentStatus?: ThreadStatus;
+    }
   ): Promise<ThreadRecord | null> {
     const current = await this.getThreadById(threadId);
     if (!current) {
@@ -439,13 +454,26 @@ export class DbThreadStore implements ThreadStore {
     }
 
     const updated = transitionThreadStatus(current, nextStatus, updatedAt);
-    await this.db
+    const whereClause =
+      options?.expectedCurrentStatus === undefined
+        ? eq(threads.threadId, updated.threadId)
+        : and(
+            eq(threads.threadId, updated.threadId),
+            eq(threads.status, options.expectedCurrentStatus)
+          );
+    const affected = await this.db
       .update(threads)
       .set({
         status: updated.status,
         updatedAt: updated.updatedAt
       })
-      .where(eq(threads.threadId, updated.threadId));
+      .where(whereClause)
+      .returning({
+        threadId: threads.threadId
+      });
+    if (affected.length === 0) {
+      return null;
+    }
 
     return updated;
   }

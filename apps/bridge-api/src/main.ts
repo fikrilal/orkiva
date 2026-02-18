@@ -3,6 +3,7 @@ import { createDb, createDbPool } from "@orkiva/db";
 import { formatConfigValidationError, loadBridgeApiConfig } from "@orkiva/shared";
 
 import { createBridgeApiApp } from "./app.js";
+import { DbAuditStore } from "./audit-store.js";
 import { DbThreadStore } from "./thread-store.js";
 
 const service = "bridge-api";
@@ -12,6 +13,7 @@ try {
   const dbPool = createDbPool(config.DATABASE_URL);
   const db = createDb(dbPool);
   const threadStore = new DbThreadStore(db);
+  const auditStore = new DbAuditStore(db);
   const verifyAccessToken = createAccessTokenVerifier({
     issuer: config.AUTH_ISSUER,
     audience: config.AUTH_AUDIENCE,
@@ -19,6 +21,7 @@ try {
   });
   const app = createBridgeApiApp({
     threadStore,
+    auditStore,
     verifyAccessToken
   });
 

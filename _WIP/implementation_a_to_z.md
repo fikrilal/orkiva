@@ -55,10 +55,10 @@ Done when: APIs pass unit + integration tests, including invalid transition path
 - [x] **J — Implement** message APIs (`post_message`, `read_messages`, `ack_read`).
 Done when: monotonic ordering, pagination, and cursor updates are validated.
 
-- [ ] **K — Keep** idempotency and retry-safe write behavior correct.
+- [x] **K — Keep** idempotency and retry-safe write behavior correct.
 Done when: duplicate `idempotency_key` returns original write result deterministically.
 
-- [ ] **L — Lock** governance authority model in code paths.
+- [x] **L — Lock** governance authority model in code paths.
 Done when: worker cannot force-close disputes; orchestrator/human authority paths are enforced and audited.
 
 - [ ] **M — Manage** session registry and heartbeat lifecycle.
