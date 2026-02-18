@@ -22,6 +22,8 @@ import {
   createThreadOutputSchema,
   getThreadInputSchema,
   getThreadOutputSchema,
+  heartbeatSessionInputSchema,
+  heartbeatSessionOutputSchema,
   postMessageInputSchema,
   postMessageOutputSchema,
   protocolErrorResponseSchema,
@@ -36,6 +38,7 @@ import {
 import Fastify, { type FastifyInstance, type FastifyRequest } from "fastify";
 
 import type { AuditEventInput, AuditStore } from "./audit-store.js";
+import type { SessionStore } from "./session-store.js";
 import type { MessageRecord, ThreadStore } from "./thread-store.js";
 
 type MCPMethodName =
@@ -43,6 +46,7 @@ type MCPMethodName =
   | "get_thread"
   | "update_thread_status"
   | "summarize_thread"
+  | "heartbeat_session"
   | "post_message"
   | "read_messages"
   | "ack_read";
@@ -60,6 +64,7 @@ declare module "fastify" {
 
 export interface BridgeApiAppDependencies {
   threadStore: ThreadStore;
+  sessionStore: SessionStore;
   auditStore?: AuditStore;
   verifyAccessToken: (token: string) => Promise<VerifiedAuthClaims>;
   now?: () => Date;
@@ -335,7 +340,8 @@ export const createBridgeApiApp = (dependencies: BridgeApiAppDependencies): Fast
       const threadId = extractThreadIdFromBody(request);
       const context = request.context;
       await writeAuditEvent({
-        workspaceId: context?.authClaims.workspaceId ?? extractWorkspaceIdFromBody(request) ?? "unknown",
+        workspaceId:
+          context?.authClaims.workspaceId ?? extractWorkspaceIdFromBody(request) ?? "unknown",
         ...(context === undefined ? {} : { actorAgentId: context.authClaims.agentId }),
         ...(context === undefined ? {} : { actorRole: context.authClaims.role }),
         operation: deriveOperationName(request),
@@ -526,6 +532,35 @@ export const createBridgeApiApp = (dependencies: BridgeApiAppDependencies): Fast
         summary: summary.summary,
         open_items: summary.openItems,
         last_status: summary.lastStatus
+      });
+    },
+    heartbeat_session: async (payload, request) => {
+      const input = heartbeatSessionInputSchema.parse(payload);
+      const { authClaims } = requireContext(request);
+
+      authorizeOperation(authClaims.role, "session:heartbeat");
+      assertPayloadIdentityMatchesClaims(authClaims, {
+        ...(input.agent_id === undefined ? {} : { agent_id: input.agent_id }),
+        session_id: input.session_id
+      });
+      if (input.workspace_id !== undefined) {
+        assertWorkspaceBoundary(authClaims, input.workspace_id);
+      }
+
+      const recorded = await dependencies.sessionStore.heartbeatSession({
+        agentId: authClaims.agentId,
+        workspaceId: authClaims.workspaceId,
+        sessionId: input.session_id,
+        runtime: input.runtime,
+        managementMode: input.management_mode,
+        resumable: input.resumable,
+        status: input.status,
+        heartbeatAt: now()
+      });
+
+      return heartbeatSessionOutputSchema.parse({
+        ok: true,
+        recorded_at: toIso(recorded.lastHeartbeatAt)
       });
     },
     post_message: async (payload, request) => {

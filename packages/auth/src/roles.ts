@@ -27,6 +27,7 @@ export type AuthOperation =
   | "thread:manage"
   | "message:read"
   | "message:write"
+  | "session:heartbeat"
   | "audit:read";
 
 const operationAllowedRoles: Readonly<Record<AuthOperation, readonly AuthRole[]>> = {
@@ -34,6 +35,7 @@ const operationAllowedRoles: Readonly<Record<AuthOperation, readonly AuthRole[]>
   "thread:manage": ["coordinator"],
   "message:read": ["participant", "coordinator", "auditor"],
   "message:write": ["participant", "coordinator"],
+  "session:heartbeat": ["participant", "coordinator", "auditor"],
   "audit:read": ["coordinator", "auditor"]
 };
 

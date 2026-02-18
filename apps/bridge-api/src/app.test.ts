@@ -6,6 +6,7 @@ import {
   ackReadOutputSchema,
   createThreadOutputSchema,
   getThreadOutputSchema,
+  heartbeatSessionOutputSchema,
   postMessageOutputSchema,
   protocolErrorResponseSchema,
   readMessagesOutputSchema,
@@ -15,6 +16,7 @@ import {
 
 import { createBridgeApiApp } from "./app.js";
 import { InMemoryAuditStore } from "./audit-store.js";
+import { InMemorySessionStore } from "./session-store.js";
 import { InMemoryThreadStore, type ThreadRecord } from "./thread-store.js";
 
 class ConflictOnSecondStatusUpdateStore extends InMemoryThreadStore {
@@ -67,12 +69,14 @@ const tokenMap: Readonly<Record<string, VerifiedAuthClaims>> = {
 
 const createTestApp = (options?: {
   auditStore?: InMemoryAuditStore;
+  sessionStore?: InMemorySessionStore;
   threadStore?: InMemoryThreadStore;
 }) => {
   let idCounter = 0;
 
   return createBridgeApiApp({
     threadStore: options?.threadStore ?? new InMemoryThreadStore(),
+    sessionStore: options?.sessionStore ?? new InMemorySessionStore(),
     ...(options?.auditStore === undefined ? {} : { auditStore: options.auditStore }),
     verifyAccessToken: (token) => {
       const claims = tokenMap[token];
@@ -90,7 +94,7 @@ const createTestApp = (options?: {
   });
 };
 
-describe("bridge-api phase 4-5", () => {
+describe("bridge-api phase 4-8", () => {
   const appsToClose: ReturnType<typeof createTestApp>[] = [];
 
   afterEach(async () => {
@@ -448,6 +452,66 @@ describe("bridge-api phase 4-5", () => {
     const payload = summarizeThreadOutputSchema.parse(summaryResponse.json());
     expect(payload.last_status).toBe("active");
     expect(typeof payload.summary).toBe("string");
+  });
+
+  it("records heartbeat_session using claim-scoped identity", async () => {
+    const sessionStore = new InMemorySessionStore();
+    const app = createTestApp({ sessionStore });
+    appsToClose.push(app);
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/v1/mcp/heartbeat_session",
+      headers: {
+        authorization: "Bearer participant_wk1"
+      },
+      payload: {
+        agent_id: "participant_agent",
+        workspace_id: "wk_01",
+        session_id: "sess_participant_agent",
+        runtime: "codex_cli",
+        management_mode: "managed",
+        resumable: true,
+        status: "idle"
+      }
+    });
+    expect(response.statusCode).toBe(200);
+    const payload = heartbeatSessionOutputSchema.parse(response.json());
+    expect(payload.recorded_at).toBe(nowIso);
+
+    const latest = await sessionStore.getLatestResumableSession({
+      agentId: "participant_agent",
+      workspaceId: "wk_01",
+      staleAfterHours: 12,
+      referenceTime: new Date("2026-02-18T08:31:00.000Z")
+    });
+    expect(latest).not.toBeNull();
+    expect(latest?.sessionId).toBe("sess_participant_agent");
+    expect(latest?.managementMode).toBe("managed");
+  });
+
+  it("rejects heartbeat_session payload identity mismatch", async () => {
+    const app = createTestApp();
+    appsToClose.push(app);
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/v1/mcp/heartbeat_session",
+      headers: {
+        authorization: "Bearer participant_wk1"
+      },
+      payload: {
+        agent_id: "participant_agent",
+        workspace_id: "wk_01",
+        session_id: "sess_other",
+        runtime: "codex_cli",
+        resumable: true,
+        status: "idle"
+      }
+    });
+    expect(response.statusCode).toBe(403);
+    const payload = protocolErrorResponseSchema.parse(response.json());
+    expect(payload.error.code).toBe("FORBIDDEN");
   });
 
   it("posts messages and reads them in deterministic order with pagination", async () => {

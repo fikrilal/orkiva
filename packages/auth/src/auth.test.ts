@@ -214,6 +214,8 @@ describe("auth guards", () => {
   it("enforces role authorization policies", () => {
     expect(() => authorizeOperation("participant", "message:write")).not.toThrow();
     expect(() => authorizeOperation("auditor", "message:write")).toThrow(AuthError);
+    expect(() => authorizeOperation("participant", "session:heartbeat")).not.toThrow();
+    expect(() => authorizeOperation("auditor", "session:heartbeat")).not.toThrow();
     expect(() => authorizeOperation("coordinator", "thread:manage")).not.toThrow();
   });
 });

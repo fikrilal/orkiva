@@ -169,23 +169,23 @@ Done when:
 
 ## 8) Manage (M) — Session Registry and Heartbeat Lifecycle
 
-- [ ] Implement `heartbeat_session` path:
+- [x] Implement `heartbeat_session` path:
   - upsert by `(agent_id, workspace_id)`
   - update `session_id`, `runtime`, `management_mode`, `resumable`, `status`, `last_heartbeat_at`
-- [ ] Implement registry lookup helper for latest resumable session by agent/workspace.
-- [ ] Implement stale session classification helper (`SESSION_STALE_AFTER_HOURS`).
-- [ ] Add tests for concurrent heartbeat updates and stale detection behavior.
+- [x] Implement registry lookup helper for latest resumable session by agent/workspace.
+- [x] Implement stale session classification helper (`SESSION_STALE_AFTER_HOURS`).
+- [x] Add tests for concurrent heartbeat updates and stale detection behavior.
 
 Done when:
-- [ ] Session registry is reliable for downstream wake orchestration use.
+- [x] Session registry is reliable for downstream wake orchestration use.
 
 ## 9) Cross-Cutting Engineering Requirements
 
-- [ ] Keep architecture boundaries clean (`pnpm run deps:check` must pass).
-- [ ] Avoid adding dependencies without explicit rationale.
-- [ ] Use shared protocol/domain types across apps to prevent contract drift.
-- [ ] Keep logs structured and secret-safe.
-- [ ] Update proposal docs in same change if behavior/policy/protocol diverges.
+- [x] Keep architecture boundaries clean (`pnpm run deps:check` must pass).
+- [x] Avoid adding dependencies without explicit rationale.
+- [x] Use shared protocol/domain types across apps to prevent contract drift.
+- [x] Keep logs structured and secret-safe.
+- [x] Update proposal docs in same change if behavior/policy/protocol diverges.
 
 ## 10) Verification Matrix (Required Before Marking F-M Done)
 
@@ -195,16 +195,17 @@ Done when:
 - [x] `tool/agent/pnpmw --no-stdin run deps:check`
 - [x] `tool/agent/pnpmw --no-stdin run test`
 - [x] `tool/agent/pnpmw --no-stdin run verify`
-- [ ] DB-backed API integration tests pass against local Postgres.
+- [x] DB-backed API integration tests pass against local Postgres.
 - [x] Auth/ACL negative tests pass.
 - [x] Contract tests for all implemented MCP methods pass.
 
 ## 11) F-M Exit Criteria
 
-- [ ] `F, G, H, I, J, K, L, M` all complete.
-- [ ] Core `/v1` thread/message/session APIs are usable with verified auth.
-- [ ] Idempotency and governance constraints are enforced and tested.
-- [ ] No unresolved high-severity risks for single-workspace MVP baseline.
+- [x] `F, G, H, I, J, K, L, M` all complete.
+- [x] Core `/v1` thread/message/session APIs are usable with verified auth.
+- [x] Idempotency and governance constraints are enforced and tested.
+- [x] No unresolved high-severity risks for single-workspace MVP baseline.
+  - Scope note: this applies to F-M core thread/message/session/auth/governance surface; runtime trigger reliability (`N+`) remains tracked separately.
 
 ## 12) Out of Scope for This Todo
 
@@ -221,6 +222,8 @@ Done when:
 - [x] Then Phase 5 (J): implement message MCP methods (`post_message`, `read_messages`, `ack_read`).
 - [x] Then Phase 6 (K): enforce idempotency race/concurrency semantics and retry-safety.
 - [x] Then Phase 7 (L): enforce governance authority and conflict/audit policy paths.
+- [x] Then Phase 8 (M): implement session registry heartbeat lifecycle and stale/session lookup helpers.
+- [x] Then Phase 9: complete cross-cutting engineering requirements for this F-M scope.
 
 Reason:
 - Contract-first + domain-first sequencing reduces API churn and rework.

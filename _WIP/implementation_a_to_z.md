@@ -61,7 +61,7 @@ Done when: duplicate `idempotency_key` returns original write result determinist
 - [x] **L — Lock** governance authority model in code paths.
 Done when: worker cannot force-close disputes; orchestrator/human authority paths are enforced and audited.
 
-- [ ] **M — Manage** session registry and heartbeat lifecycle.
+- [x] **M — Manage** session registry and heartbeat lifecycle.
 Done when: latest resumable session lookup per agent/workspace is reliable under concurrent updates.
 
 - [ ] **N — Notify** participants via unread-state reconciliation flow.
@@ -106,7 +106,7 @@ Done when: go-live checklist is signed off with known risks, rollback plan, and 
 ## Critical Path (Start Here)
 
 - [x] 1. Complete **A, B, C, D, E** first (platform foundation).
-- [ ] 2. Then complete **F, G, H, I, J, K, L, M** (core product surface).
+- [x] 2. Then complete **F, G, H, I, J, K, L, M** (core product surface).
 - [ ] 3. Then complete **N, O, P, Q, R, S, U** (runtime orchestration reliability).
 - [ ] 4. Finish with **T, V, W, X, Y, Z** (operations, validation, launch readiness).
 
