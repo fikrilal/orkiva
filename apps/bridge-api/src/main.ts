@@ -6,6 +6,7 @@ import { createBridgeApiApp } from "./app.js";
 import { DbAuditStore } from "./audit-store.js";
 import { DbSessionStore } from "./session-store.js";
 import { DbThreadStore } from "./thread-store.js";
+import { DbTriggerStore } from "./trigger-store.js";
 
 const service = "bridge-api";
 
@@ -15,6 +16,7 @@ try {
   const db = createDb(dbPool);
   const threadStore = new DbThreadStore(db);
   const sessionStore = new DbSessionStore(db);
+  const triggerStore = new DbTriggerStore(db);
   const auditStore = new DbAuditStore(db);
   const verifyAccessToken = createAccessTokenVerifier({
     issuer: config.AUTH_ISSUER,
@@ -24,8 +26,11 @@ try {
   const app = createBridgeApiApp({
     threadStore,
     sessionStore,
+    triggerStore,
     auditStore,
-    verifyAccessToken
+    verifyAccessToken,
+    sessionStaleAfterHours: config.SESSION_STALE_AFTER_HOURS,
+    triggerMaxRetries: config.TRIGGER_MAX_RETRIES
   });
 
   const closeResources = async (): Promise<void> => {

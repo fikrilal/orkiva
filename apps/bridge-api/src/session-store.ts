@@ -23,6 +23,7 @@ export interface SessionHeartbeatRecordInput {
 export interface SessionStore {
   heartbeatSession(input: SessionHeartbeatRecordInput): Promise<SessionRecord>;
   getLatestResumableSession(lookup: SessionLookupInput): Promise<SessionRecord | null>;
+  getSession(agentId: string, workspaceId: string): Promise<SessionRecord | null>;
 }
 
 export const isSessionRecordStale = (
@@ -79,6 +80,10 @@ export class InMemorySessionStore implements SessionStore {
     }
 
     return Promise.resolve(existing);
+  }
+
+  public getSession(agentId: string, workspaceId: string): Promise<SessionRecord | null> {
+    return Promise.resolve(this.sessions.get(sessionKey(agentId, workspaceId)) ?? null);
   }
 }
 
@@ -174,5 +179,14 @@ export class DbSessionStore implements SessionStore {
     }
 
     return session;
+  }
+
+  public async getSession(agentId: string, workspaceId: string): Promise<SessionRecord | null> {
+    const existing = await this.findSession(agentId, workspaceId);
+    if (!existing) {
+      return null;
+    }
+
+    return toSessionRecord(existing);
   }
 }

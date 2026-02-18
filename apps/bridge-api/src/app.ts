@@ -13,6 +13,8 @@ import {
   acknowledgeRead,
   createParticipantCursor,
   getNextMessageSequence,
+  isThreadParticipant,
+  type SessionRecord,
   type ThreadStatus
 } from "@orkiva/domain";
 import {
@@ -31,6 +33,8 @@ import {
   readMessagesOutputSchema,
   summarizeThreadInputSchema,
   summarizeThreadOutputSchema,
+  triggerParticipantOutputSchema,
+  triggerParticipantInputSchema,
   updateThreadStatusInputSchema,
   updateThreadStatusOutputSchema,
   type ProtocolErrorCode
@@ -38,8 +42,9 @@ import {
 import Fastify, { type FastifyInstance, type FastifyRequest } from "fastify";
 
 import type { AuditEventInput, AuditStore } from "./audit-store.js";
-import type { SessionStore } from "./session-store.js";
+import { isSessionRecordStale, type SessionStore } from "./session-store.js";
 import type { MessageRecord, ThreadStore } from "./thread-store.js";
+import type { TriggerJobRecord, TriggerStore } from "./trigger-store.js";
 
 type MCPMethodName =
   | "create_thread"
@@ -47,6 +52,7 @@ type MCPMethodName =
   | "update_thread_status"
   | "summarize_thread"
   | "heartbeat_session"
+  | "trigger_participant"
   | "post_message"
   | "read_messages"
   | "ack_read";
@@ -65,8 +71,11 @@ declare module "fastify" {
 export interface BridgeApiAppDependencies {
   threadStore: ThreadStore;
   sessionStore: SessionStore;
+  triggerStore: TriggerStore;
   auditStore?: AuditStore;
   verifyAccessToken: (token: string) => Promise<VerifiedAuthClaims>;
+  sessionStaleAfterHours?: number;
+  triggerMaxRetries?: number;
   now?: () => Date;
   idGenerator?: () => string;
 }
@@ -198,9 +207,138 @@ const mapUnknownError = (error: unknown): BridgeApiError => {
 const toIso = (value: Date): string => value.toISOString();
 const POST_MESSAGE_MAX_ATTEMPTS = 3;
 const OVERRIDE_REASON_PREFIXES = ["human_override:", "coordinator_override:"] as const;
+const DEFAULT_SESSION_STALE_AFTER_HOURS = 12;
+const DEFAULT_TRIGGER_MAX_RETRIES = 2;
 
 const hasExplicitOverrideReason = (value: string): boolean =>
   OVERRIDE_REASON_PREFIXES.some((prefix) => value.startsWith(prefix));
+
+type TriggerParticipantAction = "trigger_runtime" | "fallback_required";
+type TriggerParticipantResult = "queued" | "fallback_required";
+type TriggerParticipantFallbackAction = "resume_session" | "spawn_session";
+
+interface TriggerDecision {
+  action: TriggerParticipantAction;
+  result: TriggerParticipantResult;
+  jobStatus: TriggerJobRecord["status"];
+  fallbackAction?: TriggerParticipantFallbackAction;
+  staleSession: boolean;
+}
+
+const resolveTriggerDecision = (input: {
+  session: SessionRecord | null;
+  staleAfterHours: number;
+  referenceTime: Date;
+}): TriggerDecision => {
+  if (input.session === null) {
+    return {
+      action: "fallback_required",
+      result: "fallback_required",
+      jobStatus: "fallback_spawn",
+      fallbackAction: "spawn_session",
+      staleSession: false
+    };
+  }
+
+  const staleSession = isSessionRecordStale(
+    input.session,
+    input.staleAfterHours,
+    input.referenceTime
+  );
+  const managedRuntimeAvailable =
+    input.session.managementMode === "managed" &&
+    input.session.status !== "offline" &&
+    !staleSession;
+  if (managedRuntimeAvailable) {
+    return {
+      action: "trigger_runtime",
+      result: "queued",
+      jobStatus: "queued",
+      staleSession
+    };
+  }
+
+  const fallbackAction: TriggerParticipantFallbackAction =
+    input.session.resumable && !staleSession ? "resume_session" : "spawn_session";
+  return {
+    action: "fallback_required",
+    result: "fallback_required",
+    jobStatus: fallbackAction === "resume_session" ? "fallback_resume" : "fallback_spawn",
+    fallbackAction,
+    staleSession
+  };
+};
+
+const toDecisionFromJobStatus = (
+  status: TriggerJobRecord["status"]
+): {
+  action: TriggerParticipantAction;
+  result: TriggerParticipantResult;
+  fallbackAction?: TriggerParticipantFallbackAction;
+} => {
+  if (status === "fallback_resume") {
+    return {
+      action: "fallback_required",
+      result: "fallback_required",
+      fallbackAction: "resume_session"
+    };
+  }
+
+  if (status === "fallback_spawn") {
+    return {
+      action: "fallback_required",
+      result: "fallback_required",
+      fallbackAction: "spawn_session"
+    };
+  }
+
+  return {
+    action: "trigger_runtime",
+    result: "queued"
+  };
+};
+
+const hasTriggerReplayMatch = (
+  existing: TriggerJobRecord,
+  expected: {
+    threadId: string;
+    workspaceId: string;
+    targetAgentId: string;
+    reason: string;
+    prompt: string;
+  }
+): boolean =>
+  existing.threadId === expected.threadId &&
+  existing.workspaceId === expected.workspaceId &&
+  existing.targetAgentId === expected.targetAgentId &&
+  existing.reason === expected.reason &&
+  existing.prompt === expected.prompt;
+
+const toTriggerParticipantOutput = (input: {
+  record: TriggerJobRecord;
+  staleSession: boolean;
+  runtime?: string;
+  managementMode?: SessionRecord["managementMode"];
+  sessionStatus?: SessionRecord["status"];
+}): ReturnType<typeof triggerParticipantOutputSchema.parse> => {
+  const decision = toDecisionFromJobStatus(input.record.status);
+  return triggerParticipantOutputSchema.parse({
+    trigger_id: input.record.triggerId,
+    target_agent_id: input.record.targetAgentId,
+    action: decision.action,
+    result: decision.result,
+    job_status: input.record.status,
+    ...(decision.fallbackAction === undefined ? {} : { fallback_action: decision.fallbackAction }),
+    ...(input.record.targetSessionId === null
+      ? {}
+      : { target_session_id: input.record.targetSessionId }),
+    ...(input.runtime === undefined ? {} : { runtime: input.runtime }),
+    ...(input.managementMode === undefined ? {} : { management_mode: input.managementMode }),
+    ...(input.sessionStatus === undefined ? {} : { session_status: input.sessionStatus }),
+    stale_session: input.staleSession,
+    triggered_at: toIso(input.record.createdAt)
+  });
+};
 
 const isIdempotentReplayMatch = (input: {
   schemaVersion: number;
@@ -286,6 +424,9 @@ const threadRecordToProtocol = (record: {
 export const createBridgeApiApp = (dependencies: BridgeApiAppDependencies): FastifyInstance => {
   const now = dependencies.now ?? (() => new Date());
   const idGenerator = dependencies.idGenerator ?? randomUUID;
+  const sessionStaleAfterHours =
+    dependencies.sessionStaleAfterHours ?? DEFAULT_SESSION_STALE_AFTER_HOURS;
+  const triggerMaxRetries = dependencies.triggerMaxRetries ?? DEFAULT_TRIGGER_MAX_RETRIES;
   const writeAuditEvent = async (input: AuditEventInput): Promise<void> => {
     if (!dependencies.auditStore) {
       return;
@@ -562,6 +703,116 @@ export const createBridgeApiApp = (dependencies: BridgeApiAppDependencies): Fast
         ok: true,
         recorded_at: toIso(recorded.lastHeartbeatAt)
       });
+    },
+    trigger_participant: async (payload, request) => {
+      const input = triggerParticipantInputSchema.parse(payload);
+      const { authClaims } = requireContext(request);
+
+      authorizeOperation(authClaims.role, "thread:manage");
+
+      const existingThread = await dependencies.threadStore.getThreadById(input.thread_id);
+      if (!existingThread) {
+        throw new BridgeApiError("NOT_FOUND", 404, `Thread not found: ${input.thread_id}`);
+      }
+
+      assertWorkspaceBoundary(authClaims, existingThread.workspaceId);
+      if (!isThreadParticipant(existingThread, input.target_agent_id)) {
+        throw new BridgeApiError(
+          "INVALID_ARGUMENT",
+          400,
+          "Target agent is not a participant in the thread",
+          {
+            thread_id: input.thread_id,
+            target_agent_id: input.target_agent_id
+          }
+        );
+      }
+
+      const requestTime = now();
+      const currentSession = await dependencies.sessionStore.getSession(
+        input.target_agent_id,
+        existingThread.workspaceId
+      );
+      const decision = resolveTriggerDecision({
+        session: currentSession,
+        staleAfterHours: sessionStaleAfterHours,
+        referenceTime: requestTime
+      });
+
+      const triggerId = `trg_${request.id}`;
+      const createResult = await dependencies.triggerStore.createOrReuseTriggerJob({
+        triggerId,
+        threadId: input.thread_id,
+        workspaceId: existingThread.workspaceId,
+        targetAgentId: input.target_agent_id,
+        targetSessionId: currentSession?.sessionId ?? null,
+        reason: input.reason,
+        prompt: input.trigger_prompt,
+        status: decision.jobStatus,
+        attempts: 0,
+        maxRetries: triggerMaxRetries,
+        nextRetryAt: null,
+        createdAt: requestTime,
+        updatedAt: requestTime
+      });
+      if (
+        !createResult.created &&
+        !hasTriggerReplayMatch(createResult.record, {
+          threadId: input.thread_id,
+          workspaceId: existingThread.workspaceId,
+          targetAgentId: input.target_agent_id,
+          reason: input.reason,
+          prompt: input.trigger_prompt
+        })
+      ) {
+        throw new BridgeApiError(
+          "IDEMPOTENCY_CONFLICT",
+          409,
+          "Request id is already associated with a different trigger payload",
+          {
+            request_id: request.id,
+            trigger_id: triggerId
+          }
+        );
+      }
+
+      const staleSession =
+        currentSession === null
+          ? false
+          : isSessionRecordStale(currentSession, sessionStaleAfterHours, requestTime);
+      const responsePayload = toTriggerParticipantOutput({
+        record: createResult.record,
+        staleSession,
+        ...(currentSession === null ? {} : { runtime: currentSession.runtime }),
+        ...(currentSession === null ? {} : { managementMode: currentSession.managementMode }),
+        ...(currentSession === null ? {} : { sessionStatus: currentSession.status })
+      });
+
+      await writeAuditEvent({
+        workspaceId: authClaims.workspaceId,
+        actorAgentId: authClaims.agentId,
+        actorRole: authClaims.role,
+        operation: "mcp.trigger_participant",
+        resourceType: "thread",
+        resourceId: existingThread.threadId,
+        threadId: existingThread.threadId,
+        requestId: request.id,
+        result: "success",
+        payload: {
+          trigger_id: responsePayload.trigger_id,
+          target_agent_id: responsePayload.target_agent_id,
+          action: responsePayload.action,
+          result: responsePayload.result,
+          job_status: responsePayload.job_status,
+          ...(responsePayload.fallback_action === undefined
+            ? {}
+            : { fallback_action: responsePayload.fallback_action }),
+          stale_session: responsePayload.stale_session
+        },
+        createdAt: now()
+      });
+
+      return responsePayload;
     },
     post_message: async (payload, request) => {
       const input = postMessageInputSchema.parse(payload);

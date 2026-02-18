@@ -9,6 +9,8 @@ import {
   protocolErrorResponseSchema,
   readMessagesInputSchema,
   summarizeThreadInputSchema,
+  triggerParticipantInputSchema,
+  triggerParticipantOutputSchema,
   updateThreadStatusInputSchema
 } from "./index.js";
 
@@ -94,6 +96,32 @@ describe("protocol v1 contracts", () => {
       status: "idle"
     });
     expect(parsed.management_mode).toBe("unmanaged");
+  });
+
+  it("validates trigger_participant payloads", () => {
+    const input = triggerParticipantInputSchema.parse({
+      thread_id: "th_01",
+      target_agent_id: "reviewer_agent",
+      reason: "new_unread_messages",
+      trigger_prompt: "Read unread messages and continue workflow."
+    });
+    expect(input.target_agent_id).toBe("reviewer_agent");
+
+    const output = triggerParticipantOutputSchema.parse({
+      trigger_id: "trg_req_01",
+      target_agent_id: "reviewer_agent",
+      action: "fallback_required",
+      result: "fallback_required",
+      job_status: "fallback_resume",
+      fallback_action: "resume_session",
+      target_session_id: "sess_rv_12",
+      runtime: "codex_cli",
+      management_mode: "unmanaged",
+      session_status: "idle",
+      stale_session: false,
+      triggered_at: "2026-02-18T10:00:00.000Z"
+    });
+    expect(output.fallback_action).toBe("resume_session");
   });
 
   it("validates normalized error envelope", () => {

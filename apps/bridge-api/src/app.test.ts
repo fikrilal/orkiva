@@ -11,6 +11,7 @@ import {
   protocolErrorResponseSchema,
   readMessagesOutputSchema,
   summarizeThreadOutputSchema,
+  triggerParticipantOutputSchema,
   updateThreadStatusOutputSchema
 } from "@orkiva/protocol";
 
@@ -18,6 +19,7 @@ import { createBridgeApiApp } from "./app.js";
 import { InMemoryAuditStore } from "./audit-store.js";
 import { InMemorySessionStore } from "./session-store.js";
 import { InMemoryThreadStore, type ThreadRecord } from "./thread-store.js";
+import { InMemoryTriggerStore } from "./trigger-store.js";
 
 class ConflictOnSecondStatusUpdateStore extends InMemoryThreadStore {
   private successfulStatusUpdates = 0;
@@ -71,12 +73,14 @@ const createTestApp = (options?: {
   auditStore?: InMemoryAuditStore;
   sessionStore?: InMemorySessionStore;
   threadStore?: InMemoryThreadStore;
+  triggerStore?: InMemoryTriggerStore;
 }) => {
   let idCounter = 0;
 
   return createBridgeApiApp({
     threadStore: options?.threadStore ?? new InMemoryThreadStore(),
     sessionStore: options?.sessionStore ?? new InMemorySessionStore(),
+    triggerStore: options?.triggerStore ?? new InMemoryTriggerStore(),
     ...(options?.auditStore === undefined ? {} : { auditStore: options.auditStore }),
     verifyAccessToken: (token) => {
       const claims = tokenMap[token];
@@ -512,6 +516,255 @@ describe("bridge-api phase 4-8", () => {
     expect(response.statusCode).toBe(403);
     const payload = protocolErrorResponseSchema.parse(response.json());
     expect(payload.error.code).toBe("FORBIDDEN");
+  });
+
+  it("enqueues trigger_participant for managed runtime targets", async () => {
+    const app = createTestApp();
+    appsToClose.push(app);
+
+    await app.inject({
+      method: "POST",
+      url: "/v1/mcp/create_thread",
+      headers: {
+        authorization: "Bearer coordinator_wk1"
+      },
+      payload: {
+        workspace_id: "wk_01",
+        title: "trigger managed thread",
+        type: "workflow",
+        participants: ["participant_agent", "coordinator_agent"]
+      }
+    });
+
+    await app.inject({
+      method: "POST",
+      url: "/v1/mcp/heartbeat_session",
+      headers: {
+        authorization: "Bearer participant_wk1"
+      },
+      payload: {
+        session_id: "sess_participant_agent",
+        runtime: "codex_cli",
+        management_mode: "managed",
+        resumable: true,
+        status: "active"
+      }
+    });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/v1/mcp/trigger_participant",
+      headers: {
+        authorization: "Bearer coordinator_wk1"
+      },
+      payload: {
+        thread_id: "th_fixed-id",
+        target_agent_id: "participant_agent",
+        reason: "new_unread_messages",
+        trigger_prompt: "Read unread messages and continue."
+      }
+    });
+
+    expect(response.statusCode).toBe(200);
+    const payload = triggerParticipantOutputSchema.parse(response.json());
+    expect(payload.action).toBe("trigger_runtime");
+    expect(payload.result).toBe("queued");
+    expect(payload.job_status).toBe("queued");
+    expect(payload.target_session_id).toBe("sess_participant_agent");
+    expect(payload.management_mode).toBe("managed");
+    expect(payload.session_status).toBe("active");
+  });
+
+  it("returns deterministic fallback-required outcomes for unmanaged and missing sessions", async () => {
+    const app = createTestApp();
+    appsToClose.push(app);
+
+    await app.inject({
+      method: "POST",
+      url: "/v1/mcp/create_thread",
+      headers: {
+        authorization: "Bearer coordinator_wk1"
+      },
+      payload: {
+        workspace_id: "wk_01",
+        title: "trigger fallback thread",
+        type: "workflow",
+        participants: ["participant_agent", "coordinator_agent"]
+      }
+    });
+
+    await app.inject({
+      method: "POST",
+      url: "/v1/mcp/heartbeat_session",
+      headers: {
+        authorization: "Bearer participant_wk1"
+      },
+      payload: {
+        session_id: "sess_participant_agent",
+        runtime: "codex_cli",
+        management_mode: "unmanaged",
+        resumable: true,
+        status: "idle"
+      }
+    });
+
+    const unmanagedResponse = await app.inject({
+      method: "POST",
+      url: "/v1/mcp/trigger_participant",
+      headers: {
+        authorization: "Bearer coordinator_wk1"
+      },
+      payload: {
+        thread_id: "th_fixed-id",
+        target_agent_id: "participant_agent",
+        reason: "new_unread_messages",
+        trigger_prompt: "Resume and continue."
+      }
+    });
+    expect(unmanagedResponse.statusCode).toBe(200);
+    const unmanagedPayload = triggerParticipantOutputSchema.parse(unmanagedResponse.json());
+    expect(unmanagedPayload.action).toBe("fallback_required");
+    expect(unmanagedPayload.result).toBe("fallback_required");
+    expect(unmanagedPayload.job_status).toBe("fallback_resume");
+    expect(unmanagedPayload.fallback_action).toBe("resume_session");
+
+    const missingSessionResponse = await app.inject({
+      method: "POST",
+      url: "/v1/mcp/trigger_participant",
+      headers: {
+        authorization: "Bearer coordinator_wk1"
+      },
+      payload: {
+        thread_id: "th_fixed-id",
+        target_agent_id: "coordinator_agent",
+        reason: "new_unread_messages",
+        trigger_prompt: "Spawn recovery runtime."
+      }
+    });
+    expect(missingSessionResponse.statusCode).toBe(200);
+    const missingSessionPayload = triggerParticipantOutputSchema.parse(
+      missingSessionResponse.json()
+    );
+    expect(missingSessionPayload.action).toBe("fallback_required");
+    expect(missingSessionPayload.result).toBe("fallback_required");
+    expect(missingSessionPayload.job_status).toBe("fallback_spawn");
+    expect(missingSessionPayload.fallback_action).toBe("spawn_session");
+    expect(missingSessionPayload.target_session_id).toBeUndefined();
+  });
+
+  it("rejects trigger_participant when target is not a thread participant", async () => {
+    const app = createTestApp();
+    appsToClose.push(app);
+
+    await app.inject({
+      method: "POST",
+      url: "/v1/mcp/create_thread",
+      headers: {
+        authorization: "Bearer coordinator_wk1"
+      },
+      payload: {
+        workspace_id: "wk_01",
+        title: "trigger membership thread",
+        type: "workflow",
+        participants: ["participant_agent"]
+      }
+    });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/v1/mcp/trigger_participant",
+      headers: {
+        authorization: "Bearer coordinator_wk1"
+      },
+      payload: {
+        thread_id: "th_fixed-id",
+        target_agent_id: "reviewer_agent",
+        reason: "new_unread_messages",
+        trigger_prompt: "Should fail."
+      }
+    });
+
+    expect(response.statusCode).toBe(400);
+    const payload = protocolErrorResponseSchema.parse(response.json());
+    expect(payload.error.code).toBe("INVALID_ARGUMENT");
+  });
+
+  it("supports idempotent trigger_participant retries with request-id dedupe", async () => {
+    const app = createTestApp();
+    appsToClose.push(app);
+
+    await app.inject({
+      method: "POST",
+      url: "/v1/mcp/create_thread",
+      headers: {
+        authorization: "Bearer coordinator_wk1"
+      },
+      payload: {
+        workspace_id: "wk_01",
+        title: "trigger idempotency thread",
+        type: "workflow",
+        participants: ["participant_agent"]
+      }
+    });
+
+    await app.inject({
+      method: "POST",
+      url: "/v1/mcp/heartbeat_session",
+      headers: {
+        authorization: "Bearer participant_wk1"
+      },
+      payload: {
+        session_id: "sess_participant_agent",
+        runtime: "codex_cli",
+        management_mode: "managed",
+        resumable: true,
+        status: "idle"
+      }
+    });
+
+    const requestHeaders = {
+      authorization: "Bearer coordinator_wk1",
+      "x-request-id": "req_trigger_idempotent_01"
+    };
+    const payload = {
+      thread_id: "th_fixed-id",
+      target_agent_id: "participant_agent",
+      reason: "new_unread_messages",
+      trigger_prompt: "Please continue."
+    };
+
+    const first = await app.inject({
+      method: "POST",
+      url: "/v1/mcp/trigger_participant",
+      headers: requestHeaders,
+      payload
+    });
+    expect(first.statusCode).toBe(200);
+    const firstPayload = triggerParticipantOutputSchema.parse(first.json());
+
+    const retry = await app.inject({
+      method: "POST",
+      url: "/v1/mcp/trigger_participant",
+      headers: requestHeaders,
+      payload
+    });
+    expect(retry.statusCode).toBe(200);
+    const retryPayload = triggerParticipantOutputSchema.parse(retry.json());
+    expect(retryPayload.trigger_id).toBe(firstPayload.trigger_id);
+    expect(retryPayload.job_status).toBe(firstPayload.job_status);
+
+    const conflict = await app.inject({
+      method: "POST",
+      url: "/v1/mcp/trigger_participant",
+      headers: requestHeaders,
+      payload: {
+        ...payload,
+        trigger_prompt: "changed payload"
+      }
+    });
+    expect(conflict.statusCode).toBe(409);
+    const conflictPayload = protocolErrorResponseSchema.parse(conflict.json());
+    expect(conflictPayload.error.code).toBe("IDEMPOTENCY_CONFLICT");
   });
 
   it("posts messages and reads them in deterministic order with pagination", async () => {

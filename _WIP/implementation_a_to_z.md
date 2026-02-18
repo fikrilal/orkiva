@@ -65,10 +65,10 @@ Done when: worker cannot force-close disputes; orchestrator/human authority path
 - [x] **M — Manage** session registry and heartbeat lifecycle.
 Done when: latest resumable session lookup per agent/workspace is reliable under concurrent updates.
 
-- [ ] **N — Notify** participants via unread-state reconciliation flow.
+- [x] **N — Notify** participants via unread-state reconciliation flow.
 Done when: polling fallback path consistently detects unread work and updates participant state.
 
-- [ ] **O — Orchestrate** wake initiation (`trigger_participant`) at API layer.
+- [x] **O — Orchestrate** wake initiation (`trigger_participant`) at API layer.
 Done when: wake requests enqueue deterministic trigger jobs with policy-aware routing decisions.
 
 - [ ] **P — Provide** supervisor-worker runtime skeleton and registry reconciliation loop.

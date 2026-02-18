@@ -72,22 +72,22 @@ Done when:
 
 ## 2) Orchestrate (O) — `trigger_participant` API Path
 
-- [ ] Implement `trigger_participant` MCP handler in `apps/bridge-api`.
-- [ ] Validate caller authority and workspace/thread scope.
-- [ ] Validate target participant membership in thread.
-- [ ] Resolve target session from session registry with stale policy inputs.
-- [ ] Persist deterministic trigger job records (`trigger_jobs`) with trace metadata.
-- [ ] Return protocol-compliant action/result envelope:
+- [x] Implement `trigger_participant` MCP handler in `apps/bridge-api`.
+- [x] Validate caller authority and workspace/thread scope.
+- [x] Validate target participant membership in thread.
+- [x] Resolve target session from session registry with stale policy inputs.
+- [x] Persist deterministic trigger job records (`trigger_jobs`) with trace metadata.
+- [x] Return protocol-compliant action/result envelope:
   - managed runtime path
   - fallback-required path for unmanaged/offline/no-session cases
-- [ ] Add tests:
+- [x] Add tests:
   - happy path enqueue
   - unmanaged runtime deterministic fallback-required result
   - missing target/not participant failures
   - idempotent/retry-safe command behavior
 
 Done when:
-- [ ] Wake initiation decisions are deterministic, auditable, and policy-safe.
+- [x] Wake initiation decisions are deterministic, auditable, and policy-safe.
 
 ## 3) Provide (P) — Supervisor Worker Skeleton
 
@@ -183,12 +183,12 @@ Done when:
 
 ## 9) Verification Matrix (Required During N-U)
 
-- [ ] `tool/agent/pnpmw --no-stdin run format`
-- [ ] `tool/agent/pnpmw --no-stdin run lint`
-- [ ] `tool/agent/pnpmw --no-stdin run typecheck`
-- [ ] `tool/agent/pnpmw --no-stdin run deps:check`
-- [ ] `tool/agent/pnpmw --no-stdin run test`
-- [ ] `tool/agent/pnpmw --no-stdin run verify`
+- [x] `tool/agent/pnpmw --no-stdin run format`
+- [x] `tool/agent/pnpmw --no-stdin run lint`
+- [x] `tool/agent/pnpmw --no-stdin run typecheck`
+- [x] `tool/agent/pnpmw --no-stdin run deps:check`
+- [x] `tool/agent/pnpmw --no-stdin run test`
+- [x] `tool/agent/pnpmw --no-stdin run verify`
 - [ ] DB-backed integration tests pass for trigger/session/runtime paths.
 - [ ] Deterministic fallback and collision behavior validated by scenario tests.
 
@@ -208,7 +208,7 @@ Done when:
 ## 12) Immediate Next Action (Implement First)
 
 - [x] Start with Phase 1 (N): unread-state reconciliation and polling fallback baseline.
-- [ ] Then Phase 2 (O): implement `trigger_participant` API enqueue/decision path.
+- [x] Then Phase 2 (O): implement `trigger_participant` API enqueue/decision path.
 
 Reason:
 - Reliable unread detection and deterministic trigger initiation are prerequisites for all downstream worker/runtime mechanics.

@@ -7,13 +7,15 @@ import {
   createThreadOutputSchema,
   heartbeatSessionOutputSchema,
   postMessageOutputSchema,
-  readMessagesOutputSchema
+  readMessagesOutputSchema,
+  triggerParticipantOutputSchema
 } from "@orkiva/protocol";
 
 import { createBridgeApiApp } from "./app.js";
 import { DbAuditStore } from "./audit-store.js";
 import { DbSessionStore } from "./session-store.js";
 import { DbThreadStore } from "./thread-store.js";
+import { DbTriggerStore } from "./trigger-store.js";
 
 const runIntegration =
   process.env["RUN_DB_INTEGRATION_TESTS"] === "true" && Boolean(process.env["DATABASE_URL"]);
@@ -48,6 +50,7 @@ describeDb("bridge-api db integration", () => {
   const app = createBridgeApiApp({
     threadStore: new DbThreadStore(db),
     sessionStore,
+    triggerStore: new DbTriggerStore(db),
     auditStore: new DbAuditStore(db),
     verifyAccessToken: (token) => {
       const claims = tokenMap[token];
@@ -219,5 +222,88 @@ describeDb("bridge-api db integration", () => {
     expect(latest?.sessionId).toBe("sess_participant_agent");
     expect(latest?.managementMode).toBe("managed");
     expect(latest?.status).toBe("idle");
+  });
+
+  it("persists deterministic trigger_participant jobs", async () => {
+    const createThread = await app.inject({
+      method: "POST",
+      url: "/v1/mcp/create_thread",
+      headers: {
+        authorization: "Bearer coordinator_wk1"
+      },
+      payload: {
+        workspace_id: "wk_01",
+        title: "db trigger thread",
+        type: "workflow",
+        participants: ["participant_agent", "coordinator_agent"]
+      }
+    });
+    expect(createThread.statusCode).toBe(200);
+    createThreadOutputSchema.parse(createThread.json());
+
+    const heartbeat = await app.inject({
+      method: "POST",
+      url: "/v1/mcp/heartbeat_session",
+      headers: {
+        authorization: "Bearer participant_wk1"
+      },
+      payload: {
+        session_id: "sess_participant_agent",
+        runtime: "codex_cli",
+        management_mode: "managed",
+        resumable: true,
+        status: "active"
+      }
+    });
+    expect(heartbeat.statusCode).toBe(200);
+    heartbeatSessionOutputSchema.parse(heartbeat.json());
+
+    const first = await app.inject({
+      method: "POST",
+      url: "/v1/mcp/trigger_participant",
+      headers: {
+        authorization: "Bearer coordinator_wk1",
+        "x-request-id": "req_db_trigger_01"
+      },
+      payload: {
+        thread_id: "th_fixed-id",
+        target_agent_id: "participant_agent",
+        reason: "new_unread_messages",
+        trigger_prompt: "Continue processing unread work."
+      }
+    });
+    expect(first.statusCode).toBe(200);
+    const firstPayload = triggerParticipantOutputSchema.parse(first.json());
+    expect(firstPayload.action).toBe("trigger_runtime");
+    expect(firstPayload.job_status).toBe("queued");
+
+    const retry = await app.inject({
+      method: "POST",
+      url: "/v1/mcp/trigger_participant",
+      headers: {
+        authorization: "Bearer coordinator_wk1",
+        "x-request-id": "req_db_trigger_01"
+      },
+      payload: {
+        thread_id: "th_fixed-id",
+        target_agent_id: "participant_agent",
+        reason: "new_unread_messages",
+        trigger_prompt: "Continue processing unread work."
+      }
+    });
+    expect(retry.statusCode).toBe(200);
+    const retryPayload = triggerParticipantOutputSchema.parse(retry.json());
+    expect(retryPayload.trigger_id).toBe(firstPayload.trigger_id);
+
+    const jobs = await pool.query<{ total: string; status: string }>(
+      `
+      select count(*)::text as total, min(status)::text as status
+      from trigger_jobs
+      where trigger_id = $1
+      `,
+      [firstPayload.trigger_id]
+    );
+    expect(jobs.rows[0]?.total).toBe("1");
+    expect(jobs.rows[0]?.status).toBe("queued");
   });
 });

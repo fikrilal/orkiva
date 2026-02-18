@@ -328,16 +328,30 @@ Input:
 Output:
 ```json
 {
+  "trigger_id": "trg_req_8f8f7d8e",
   "target_agent_id": "reviewer_agent",
   "action": "trigger_runtime",
-  "result": "deferred",
-  "defer_reason": "human_input_busy",
-  "deferred_until": "2026-02-17T12:26:03Z",
-  "fallback_action": "resume_session",
-  "runtime_command": "codex exec resume sess_rv_12 \"You have unread messages in thread th_01JXYZ...\"",
+  "result": "queued",
+  "job_status": "queued",
+  "target_session_id": "sess_rv_12",
+  "runtime": "codex_cli",
+  "management_mode": "managed",
+  "session_status": "active",
+  "stale_session": false,
   "triggered_at": "2026-02-17T12:25:03Z"
 }
 ```
+
+Bridge enqueue decision contract (current implementation baseline):
+- `action=trigger_runtime` and `result=queued` only when target has non-stale managed runtime (`status != offline`).
+- `action=fallback_required` and `result=fallback_required` for unmanaged/offline/no-session targets.
+- `fallback_action=resume_session` when resumable + non-stale session exists.
+- `fallback_action=spawn_session` when no resumable non-stale session exists.
+
+Deterministic idempotency baseline:
+- `trigger_id` is deterministic per request ID.
+- Retries with same request ID and same payload return the existing trigger job.
+- Retries with same request ID and different payload return `IDEMPOTENCY_CONFLICT`.
 
 Codex CLI runtime notes:
 - Preferred path: trigger live managed runtime via supervisor PTY delivery.
