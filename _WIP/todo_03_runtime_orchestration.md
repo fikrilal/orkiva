@@ -110,17 +110,17 @@ Done when:
 
 ## 4) Queue (Q) — Trigger Job Processing + Retry/Backoff
 
-- [ ] Implement trigger job claim/lock strategy to avoid double-processing.
-- [ ] Implement retry/backoff policy with bounded attempts.
-- [ ] Implement dead-letter/final-failed visibility path.
-- [ ] Persist attempt outcomes in `trigger_attempts` with reason codes.
-- [ ] Add tests:
+- [x] Implement trigger job claim/lock strategy to avoid double-processing.
+- [x] Implement retry/backoff policy with bounded attempts.
+- [x] Implement dead-letter/final-failed visibility path.
+- [x] Persist attempt outcomes in `trigger_attempts` with reason codes.
+- [x] Add tests:
   - transient failure retry behavior
   - max-retry exhaustion behavior
   - concurrent worker safety
 
 Done when:
-- [ ] Trigger queue processing is retry-safe, bounded, and operationally transparent.
+- [x] Trigger queue processing is retry-safe, bounded, and operationally transparent.
 
 ## 5) Run (R) — Managed Runtime PTY Adapter (tmux First)
 

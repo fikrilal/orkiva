@@ -3,15 +3,18 @@ import type {
   UnreadReconciliationService
 } from "./unread-reconciliation.js";
 import type { ReconcileRuntimeResult, RuntimeRegistryService } from "./runtime-registry.js";
+import type { TriggerQueueProcessingResult } from "./trigger-queue.js";
 
 export interface SupervisorWorkerLoopResult {
   unreadReconciliation: UnreadReconciliationResult;
   runtimeReconciliation: ReconcileRuntimeResult;
+  triggerQueueProcessing: TriggerQueueProcessingResult;
 }
 
 export interface SupervisorWorkerLoopInput {
   workspaceId: string;
   staleAfterHours: number;
+  maxJobsPerTick: number;
   tickAt?: Date;
 }
 
@@ -21,7 +24,14 @@ export class SupervisorWorkerLoop {
     private readonly runtimeRegistryService: Pick<
       RuntimeRegistryService,
       "reconcileWorkspaceRuntimes"
-    >
+    >,
+    private readonly triggerQueueProcessor: {
+      processDueJobs: (input: {
+        workspaceId: string;
+        limit: number;
+        processedAt: Date;
+      }) => Promise<TriggerQueueProcessingResult>;
+    }
   ) {}
 
   public async runTick(input: SupervisorWorkerLoopInput): Promise<SupervisorWorkerLoopResult> {
@@ -36,10 +46,16 @@ export class SupervisorWorkerLoop {
       staleAfterHours: input.staleAfterHours,
       reconciledAt: tickAt
     });
+    const triggerQueueProcessing = await this.triggerQueueProcessor.processDueJobs({
+      workspaceId: input.workspaceId,
+      limit: input.maxJobsPerTick,
+      processedAt: tickAt
+    });
 
     return {
       unreadReconciliation,
-      runtimeReconciliation
+      runtimeReconciliation,
+      triggerQueueProcessing
     };
   }
 }

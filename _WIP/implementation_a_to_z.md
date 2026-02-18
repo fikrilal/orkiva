@@ -74,7 +74,7 @@ Done when: wake requests enqueue deterministic trigger jobs with policy-aware ro
 - [x] **P — Provide** supervisor-worker runtime skeleton and registry reconciliation loop.
 Done when: worker can register, reconcile, and transition runtime states robustly.
 
-- [ ] **Q — Queue** trigger jobs with retries/backoff and dead-letter handling.
+- [x] **Q — Queue** trigger jobs with retries/backoff and dead-letter handling.
 Done when: transient failure recovery works and irrecoverable jobs are visible for operator action.
 
 - [ ] **R — Run** managed-runtime PTY adapter (tmux first).

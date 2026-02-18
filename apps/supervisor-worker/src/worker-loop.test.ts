@@ -26,15 +26,29 @@ describe("supervisor worker loop", () => {
         transitionedOffline: 1
       })
     );
+    const processDueJobs = vi.fn(() =>
+      Promise.resolve({
+        workspaceId: "wk_01",
+        processedAt: tickAt,
+        claimedJobs: 2,
+        delivered: 1,
+        retried: 1,
+        deadLettered: 0,
+        failed: 0,
+        deadLetterJobIds: []
+      })
+    );
 
     const loop = new SupervisorWorkerLoop(
       { reconcile: unreadReconcile },
-      { reconcileWorkspaceRuntimes: runtimeReconcile }
+      { reconcileWorkspaceRuntimes: runtimeReconcile },
+      { processDueJobs }
     );
 
     const result = await loop.runTick({
       workspaceId: "wk_01",
       staleAfterHours: 12,
+      maxJobsPerTick: 10,
       tickAt
     });
 
@@ -48,7 +62,13 @@ describe("supervisor worker loop", () => {
       staleAfterHours: 12,
       reconciledAt: tickAt
     });
+    expect(processDueJobs).toHaveBeenCalledWith({
+      workspaceId: "wk_01",
+      limit: 10,
+      processedAt: tickAt
+    });
     expect(result.unreadReconciliation.stats.participantsScanned).toBe(4);
     expect(result.runtimeReconciliation.transitionedOffline).toBe(1);
+    expect(result.triggerQueueProcessing.claimedJobs).toBe(2);
   });
 });

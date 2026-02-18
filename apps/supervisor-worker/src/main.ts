@@ -3,6 +3,11 @@ import { formatConfigValidationError, loadSupervisorWorkerConfig } from "@orkiva
 
 import { DbRuntimeRegistryStore, RuntimeRegistryService } from "./runtime-registry.js";
 import {
+  DbTriggerQueueStore,
+  NotImplementedTriggerJobExecutor,
+  TriggerQueueProcessor
+} from "./trigger-queue.js";
+import {
   DbUnreadReconciliationSnapshotStore,
   InMemoryUnreadReconciliationStateStore,
   UnreadReconciliationService
@@ -20,22 +25,36 @@ try {
     new InMemoryUnreadReconciliationStateStore()
   );
   const runtimeRegistryService = new RuntimeRegistryService(new DbRuntimeRegistryStore(db));
-  const workerLoop = new SupervisorWorkerLoop(reconciliationService, runtimeRegistryService);
+  const triggerQueueProcessor = new TriggerQueueProcessor(
+    new DbTriggerQueueStore(db),
+    new NotImplementedTriggerJobExecutor()
+  );
+  const workerLoop = new SupervisorWorkerLoop(
+    reconciliationService,
+    runtimeRegistryService,
+    triggerQueueProcessor
+  );
 
   const runPollingTick = async (): Promise<void> => {
     const result = await workerLoop.runTick({
       workspaceId: config.WORKSPACE_ID,
-      staleAfterHours: config.SESSION_STALE_AFTER_HOURS
+      staleAfterHours: config.SESSION_STALE_AFTER_HOURS,
+      maxJobsPerTick: config.WORKER_MAX_PARALLEL_JOBS
     });
     const unreadResult = result.unreadReconciliation;
     const runtimeResult = result.runtimeReconciliation;
-    if (unreadResult.candidates.length > 0 || runtimeResult.transitionedOffline > 0) {
+    const queueResult = result.triggerQueueProcessing;
+    if (
+      unreadResult.candidates.length > 0 ||
+      runtimeResult.transitionedOffline > 0 ||
+      queueResult.claimedJobs > 0
+    ) {
       console.log(
-        `[${service}] tick candidates=${unreadResult.candidates.length} participantsScanned=${unreadResult.stats.participantsScanned} deduplicated=${unreadResult.stats.deduplicatedParticipants} runtimesChecked=${runtimeResult.checkedRuntimes} transitionedOffline=${runtimeResult.transitionedOffline}`
+        `[${service}] tick candidates=${unreadResult.candidates.length} participantsScanned=${unreadResult.stats.participantsScanned} deduplicated=${unreadResult.stats.deduplicatedParticipants} runtimesChecked=${runtimeResult.checkedRuntimes} transitionedOffline=${runtimeResult.transitionedOffline} jobsClaimed=${queueResult.claimedJobs} delivered=${queueResult.delivered} retried=${queueResult.retried} deadLettered=${queueResult.deadLettered}`
       );
     } else {
       console.log(
-        `[${service}] tick completed (participantsScanned=${unreadResult.stats.participantsScanned}, runtimesChecked=${runtimeResult.checkedRuntimes})`
+        `[${service}] tick completed (participantsScanned=${unreadResult.stats.participantsScanned}, runtimesChecked=${runtimeResult.checkedRuntimes}, jobsClaimed=${queueResult.claimedJobs})`
       );
     }
   };
