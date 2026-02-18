@@ -135,7 +135,6 @@ Reference:
 ├─ packages/                 # domain, protocol, db, auth, observability, shared
 ├─ infra/                    # local infra bootstrap (postgres compose)
 ├─ docs/proposal/            # full proposal specs
-├─ _WIP/                     # implementation roadmap and active todo docs
 ├─ tool/agent/               # Windows/WSL wrappers for dev commands
 └─ AGENTS.md                 # strict contributor/AI rules
 ```
@@ -185,6 +184,7 @@ Operational readiness artifacts:
 - `docs/runbooks/mvp_incident_runbooks.md`
 - `docs/proposal/06-operations/runbook_drill_evidence.md`
 - `docs/proposal/06-operations/launch_readiness_and_handoff.md`
+- `docs/proposal/06-operations/local_deployment_and_usage.md`
 
 Quality policy highlights:
 

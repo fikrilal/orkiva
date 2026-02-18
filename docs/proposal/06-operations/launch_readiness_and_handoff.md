@@ -16,7 +16,7 @@
 
 | Checklist item | Status | Evidence |
 |---|---|---|
-| Functional acceptance criteria passed for pilot workflow | signed | `apps/bridge-api/src/workflow.integration.test.ts`, `_WIP/mvp_acceptance_checklist.md` (`F-09`) |
+| Functional acceptance criteria passed for pilot workflow | signed | `apps/bridge-api/src/workflow.integration.test.ts`, `docs/proposal/06-operations/mvp_acceptance_checklist.md` (`F-09`) |
 | Security checks passed | signed | `packages/auth/src/auth.test.ts`, `apps/bridge-api/src/security-load.test.ts` |
 | Alerting/operational signals verified | signed | `apps/bridge-api/src/app.test.ts` (`/health`, `/ready`, `/metrics`), `docs/proposal/06-operations/slo_sli_baseline.md` |
 | Runbooks published and drill-validated | signed | `docs/runbooks/mvp_incident_runbooks.md`, `docs/proposal/06-operations/runbook_drill_evidence.md` |
@@ -59,6 +59,7 @@ Baseline commands:
 
 Release cut reference:
 - `docs/proposal/06-operations/release_tag_plan.md`
+- `docs/proposal/06-operations/local_deployment_and_usage.md`
 
 ## Phase-2 Backlog (Post-MVP)
 
