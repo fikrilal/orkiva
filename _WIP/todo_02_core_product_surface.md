@@ -86,24 +86,24 @@ Done when:
 
 ## 3) Harden (H) — Identity Verification and Authorization
 
-- [ ] Implement access-token verification in `packages/auth` using `jose`:
+- [x] Implement access-token verification in `packages/auth` using `jose`:
   - signature verification (JWKS)
   - `iat/exp/jti` checks
   - required claim presence checks
-- [ ] Map verified claims to caller context:
+- [x] Map verified claims to caller context:
   - `agent_id`, `workspace_id`, `role`, `session_id`
-- [ ] Reject payload identity mismatch with verified claims.
-- [ ] Implement role policy helpers:
+- [x] Reject payload identity mismatch with verified claims.
+- [x] Implement role policy helpers:
   - `participant`, `coordinator`, `auditor`
-- [ ] Implement workspace-boundary guard (single-workspace trust domain).
-- [ ] Add auth tests:
+- [x] Implement workspace-boundary guard (single-workspace trust domain).
+- [x] Add auth tests:
   - missing/expired/invalid token
   - missing claims
   - claim mismatch
   - cross-workspace rejection
 
 Done when:
-- [ ] Every protected bridge operation depends on verified claims and ACL checks.
+- [x] Every protected bridge operation depends on verified claims and ACL checks.
 
 ## 4) Implement (I) — Thread MCP APIs
 
@@ -196,7 +196,7 @@ Done when:
 - [ ] `tool/agent/pnpmw --no-stdin run test`
 - [ ] `tool/agent/pnpmw --no-stdin run verify`
 - [ ] DB-backed API integration tests pass against local Postgres.
-- [ ] Auth/ACL negative tests pass.
+- [x] Auth/ACL negative tests pass.
 - [ ] Contract tests for all implemented MCP methods pass.
 
 ## 11) F-M Exit Criteria
@@ -217,6 +217,8 @@ Done when:
 - [x] Start with Phase 1 (F): implement domain transition rules + tests.
 - [x] Then Phase 2 (G): define protocol schemas for thread/message/session methods.
 - [ ] Then Phase 3 (H): implement token verification and authorization helpers in `packages/auth`.
+- [x] Then Phase 3 (H): implement token verification and authorization helpers in `packages/auth`.
+- [ ] Then Phase 4 (I): wire `bridge-api` runtime skeleton and thread APIs.
 
 Reason:
 - Contract-first + domain-first sequencing reduces API churn and rework.
