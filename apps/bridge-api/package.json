@@ -13,6 +13,12 @@
     "start": "node dist/main.js"
   },
   "dependencies": {
-    "@orkiva/shared": "workspace:*"
+    "@orkiva/auth": "workspace:*",
+    "@orkiva/db": "workspace:*",
+    "@orkiva/domain": "workspace:*",
+    "@orkiva/protocol": "workspace:*",
+    "@orkiva/shared": "workspace:*",
+    "drizzle-orm": "^0.44.5",
+    "fastify": "^5.6.1"
   }
 }

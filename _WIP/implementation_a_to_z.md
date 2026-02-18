@@ -40,16 +40,16 @@ Done when: validated env schema exists for API, worker, auth, db, and observabil
 - [x] **E — Establish** Postgres schema and migration pipeline.
 Done when: core tables (`threads`, `messages`, `cursors`, `sessions`, `trigger_*`, `audit`) are migrated and tested.
 
-- [ ] **F — Form** domain model and state-transition rules.
+- [x] **F — Form** domain model and state-transition rules.
 Done when: thread/message/session invariants are encoded in domain services with tests.
 
-- [ ] **G — Generate** protocol schemas and shared contract package.
+- [x] **G — Generate** protocol schemas and shared contract package.
 Done when: `/v1` request/response + error schemas are versioned and reused by API and tests.
 
-- [ ] **H — Harden** identity verification and authorization.
+- [x] **H — Harden** identity verification and authorization.
 Done when: signed token claims are required, claim mismatch is rejected, and ACL checks are enforced.
 
-- [ ] **I — Implement** thread APIs (`create_thread`, `get_thread`, `update_thread_status`, `summarize_thread`).
+- [x] **I — Implement** thread APIs (`create_thread`, `get_thread`, `update_thread_status`, `summarize_thread`).
 Done when: APIs pass unit + integration tests, including invalid transition paths.
 
 - [ ] **J — Implement** message APIs (`post_message`, `read_messages`, `ack_read`).

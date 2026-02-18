@@ -107,22 +107,22 @@ Done when:
 
 ## 4) Implement (I) — Thread MCP APIs
 
-- [ ] Wire `apps/bridge-api` runtime skeleton:
+- [x] Wire `apps/bridge-api` runtime skeleton:
   - Fastify app bootstrapping
   - MCP method registration surface
   - request context + correlation IDs
-- [ ] Implement `create_thread` endpoint path:
+- [x] Implement `create_thread` endpoint path:
   - validate input via protocol schema
   - enforce authz
   - persist thread + participants
   - return protocol-compliant response
-- [ ] Implement `get_thread` path with workspace ACL.
-- [ ] Implement `update_thread_status` with domain transition guard + authority checks.
-- [ ] Implement `summarize_thread` baseline behavior (deterministic and bounded).
-- [ ] Add unit + integration tests for positive/negative paths.
+- [x] Implement `get_thread` path with workspace ACL.
+- [x] Implement `update_thread_status` with domain transition guard + authority checks.
+- [x] Implement `summarize_thread` baseline behavior (deterministic and bounded).
+- [x] Add unit + integration tests for positive/negative paths.
 
 Done when:
-- [ ] Thread APIs are functional, policy-checked, and covered by tests.
+- [x] Thread APIs are functional, policy-checked, and covered by tests.
 
 ## 5) Implement (J) — Message MCP APIs
 
@@ -189,15 +189,15 @@ Done when:
 
 ## 10) Verification Matrix (Required Before Marking F-M Done)
 
-- [ ] `tool/agent/pnpmw --no-stdin run format`
-- [ ] `tool/agent/pnpmw --no-stdin run lint`
-- [ ] `tool/agent/pnpmw --no-stdin run typecheck`
-- [ ] `tool/agent/pnpmw --no-stdin run deps:check`
-- [ ] `tool/agent/pnpmw --no-stdin run test`
-- [ ] `tool/agent/pnpmw --no-stdin run verify`
+- [x] `tool/agent/pnpmw --no-stdin run format`
+- [x] `tool/agent/pnpmw --no-stdin run lint`
+- [x] `tool/agent/pnpmw --no-stdin run typecheck`
+- [x] `tool/agent/pnpmw --no-stdin run deps:check`
+- [x] `tool/agent/pnpmw --no-stdin run test`
+- [x] `tool/agent/pnpmw --no-stdin run verify`
 - [ ] DB-backed API integration tests pass against local Postgres.
 - [x] Auth/ACL negative tests pass.
-- [ ] Contract tests for all implemented MCP methods pass.
+- [x] Contract tests for all implemented MCP methods pass.
 
 ## 11) F-M Exit Criteria
 
@@ -216,9 +216,9 @@ Done when:
 
 - [x] Start with Phase 1 (F): implement domain transition rules + tests.
 - [x] Then Phase 2 (G): define protocol schemas for thread/message/session methods.
-- [ ] Then Phase 3 (H): implement token verification and authorization helpers in `packages/auth`.
 - [x] Then Phase 3 (H): implement token verification and authorization helpers in `packages/auth`.
-- [ ] Then Phase 4 (I): wire `bridge-api` runtime skeleton and thread APIs.
+- [x] Then Phase 4 (I): wire `bridge-api` runtime skeleton and thread APIs.
+- [ ] Then Phase 5 (J): implement message MCP methods (`post_message`, `read_messages`, `ack_read`).
 
 Reason:
 - Contract-first + domain-first sequencing reduces API churn and rework.
