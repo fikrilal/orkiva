@@ -69,20 +69,20 @@ Done when:
 
 ## 2) Generate (G) — Protocol Schemas and Shared Contract Package
 
-- [ ] Implement versioned protocol schema modules in `packages/protocol/src/v1`:
+- [x] Implement versioned protocol schema modules in `packages/protocol/src/v1`:
   - input/output schemas for:
     - `create_thread`, `get_thread`, `update_thread_status`, `summarize_thread`
     - `post_message`, `read_messages`, `ack_read`
     - `heartbeat_session`
   - shared entity schemas (`thread`, `message`, `cursor`, `session`)
   - shared pagination and metadata schemas
-- [ ] Define normalized error schema + error code catalog for `/v1`.
-- [ ] Enforce `schema_version` rules for message payloads.
-- [ ] Export TypeScript types from schemas as the only API contract source for apps/tests.
-- [ ] Add contract tests with valid/invalid fixtures.
+- [x] Define normalized error schema + error code catalog for `/v1`.
+- [x] Enforce `schema_version` rules for message payloads.
+- [x] Export TypeScript types from schemas as the only API contract source for apps/tests.
+- [x] Add contract tests with valid/invalid fixtures.
 
 Done when:
-- [ ] All MCP method payloads are schema-validated and type-safe from one package.
+- [x] All MCP method payloads are schema-validated and type-safe from one package.
 
 ## 3) Harden (H) — Identity Verification and Authorization
 
@@ -215,7 +215,8 @@ Done when:
 ## 13) Immediate Next Action (Implement First)
 
 - [x] Start with Phase 1 (F): implement domain transition rules + tests.
-- [ ] Then Phase 2 (G): define protocol schemas for thread/message/session methods.
+- [x] Then Phase 2 (G): define protocol schemas for thread/message/session methods.
+- [ ] Then Phase 3 (H): implement token verification and authorization helpers in `packages/auth`.
 
 Reason:
 - Contract-first + domain-first sequencing reduces API churn and rework.
