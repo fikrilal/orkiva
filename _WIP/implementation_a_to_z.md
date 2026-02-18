@@ -9,6 +9,7 @@ Detailed workstream todos:
 
 - `_WIP/todo_01_foundation_bootstrap.md` (A-E)
 - `_WIP/todo_02_core_product_surface.md` (F-M)
+- `_WIP/todo_03_runtime_orchestration.md` (N-U)
 
 ## Scope
 
