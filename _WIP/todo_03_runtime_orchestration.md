@@ -124,19 +124,19 @@ Done when:
 
 ## 5) Run (R) — Managed Runtime PTY Adapter (tmux First)
 
-- [ ] Implement PTY adapter interface in worker.
-- [ ] Implement tmux adapter:
+- [x] Implement PTY adapter interface in worker.
+- [x] Implement tmux adapter:
   - target resolution
   - safe stdin text delivery (`send-keys` style)
   - pane/process liveness checks
-- [ ] Enforce payload safety:
+- [x] Enforce payload safety:
   - trigger payload is text input only
   - bounded payload size
   - sanitized control chars per policy
-- [ ] Add tests/mocks for adapter behavior and failure classifications.
+- [x] Add tests/mocks for adapter behavior and failure classifications.
 
 Done when:
-- [ ] Managed tmux runtimes can be targeted and validated reliably.
+- [x] Managed tmux runtimes can be targeted and validated reliably.
 
 ## 6) Safeguard (S) — Collision, Loop, and Rate Controls
 

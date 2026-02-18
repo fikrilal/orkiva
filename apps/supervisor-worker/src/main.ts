@@ -2,11 +2,9 @@ import { createDb, createDbPool } from "@orkiva/db";
 import { formatConfigValidationError, loadSupervisorWorkerConfig } from "@orkiva/shared";
 
 import { DbRuntimeRegistryStore, RuntimeRegistryService } from "./runtime-registry.js";
-import {
-  DbTriggerQueueStore,
-  NotImplementedTriggerJobExecutor,
-  TriggerQueueProcessor
-} from "./trigger-queue.js";
+import { ManagedRuntimeTriggerJobExecutor } from "./runtime-trigger-executor.js";
+import { TmuxTriggerPtyAdapter } from "./tmux-adapter.js";
+import { DbTriggerQueueStore, TriggerQueueProcessor } from "./trigger-queue.js";
 import {
   DbUnreadReconciliationSnapshotStore,
   InMemoryUnreadReconciliationStateStore,
@@ -20,14 +18,15 @@ try {
   const config = loadSupervisorWorkerConfig(process.env);
   const dbPool = createDbPool(config.DATABASE_URL);
   const db = createDb(dbPool);
+  const runtimeRegistryStore = new DbRuntimeRegistryStore(db);
   const reconciliationService = new UnreadReconciliationService(
     new DbUnreadReconciliationSnapshotStore(db),
     new InMemoryUnreadReconciliationStateStore()
   );
-  const runtimeRegistryService = new RuntimeRegistryService(new DbRuntimeRegistryStore(db));
+  const runtimeRegistryService = new RuntimeRegistryService(runtimeRegistryStore);
   const triggerQueueProcessor = new TriggerQueueProcessor(
     new DbTriggerQueueStore(db),
-    new NotImplementedTriggerJobExecutor()
+    new ManagedRuntimeTriggerJobExecutor(runtimeRegistryStore, new TmuxTriggerPtyAdapter())
   );
   const workerLoop = new SupervisorWorkerLoop(
     reconciliationService,

@@ -77,7 +77,7 @@ Done when: worker can register, reconcile, and transition runtime states robustl
 - [x] **Q — Queue** trigger jobs with retries/backoff and dead-letter handling.
 Done when: transient failure recovery works and irrecoverable jobs are visible for operator action.
 
-- [ ] **R — Run** managed-runtime PTY adapter (tmux first).
+- [x] **R — Run** managed-runtime PTY adapter (tmux first).
 Done when: supervisor can launch, target, and health-check role-specific tmux panes.
 
 - [ ] **S — Safeguard** collision, loop, and rate-control policies.
