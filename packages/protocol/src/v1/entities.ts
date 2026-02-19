@@ -24,6 +24,9 @@ export const threadEntitySchema = z.object({
   title: nonEmptyStringSchema,
   type: threadTypeSchema,
   status: threadStatusSchema,
+  escalation_owner_agent_id: nonEmptyStringSchema.nullable().optional(),
+  escalation_assigned_by_agent_id: nonEmptyStringSchema.nullable().optional(),
+  escalation_assigned_at: isoDatetimeSchema.nullable().optional(),
   participants: z.array(nonEmptyStringSchema),
   created_at: isoDatetimeSchema,
   updated_at: isoDatetimeSchema

@@ -53,13 +53,17 @@ export const threads = pgTable(
     title: text("title").notNull(),
     type: threadTypeEnum("type").notNull(),
     status: threadStatusEnum("status").notNull().default("active"),
+    escalationOwnerAgentId: text("escalation_owner_agent_id"),
+    escalationAssignedByAgentId: text("escalation_assigned_by_agent_id"),
+    escalationAssignedAt: timestamp("escalation_assigned_at", { withTimezone: true }),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow()
   },
   (table) => [
     index("threads_workspace_idx").on(table.workspaceId),
     index("threads_status_idx").on(table.status),
-    index("threads_workspace_status_idx").on(table.workspaceId, table.status)
+    index("threads_workspace_status_idx").on(table.workspaceId, table.status),
+    index("threads_escalation_owner_idx").on(table.escalationOwnerAgentId)
   ]
 );
 

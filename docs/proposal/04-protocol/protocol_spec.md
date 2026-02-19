@@ -39,6 +39,9 @@ Fields:
 - `title` (string)
 - `type` (`conversation` | `workflow` | `incident`)
 - `status` (`active` | `blocked` | `resolved` | `closed`)
+- `escalation_owner_agent_id` (string, nullable; set for blocked escalation ownership)
+- `escalation_assigned_by_agent_id` (string, nullable)
+- `escalation_assigned_at` (datetime, nullable)
 - `participants` (list of agent IDs)
 - `created_at`, `updated_at`
 
@@ -240,6 +243,9 @@ Purpose:
 Authority rule:
 - Human operator and orchestrator can request override-oriented transitions.
 - Worker agents are restricted from force-closing disputed threads.
+- For blocked threads with assigned escalation owner, unblock/close transitions require either:
+  - actor identity matching current `escalation_owner_agent_id`, or
+  - explicit override reason prefix (`human_override:` or `coordinator_override:`).
 
 Input:
 ```json

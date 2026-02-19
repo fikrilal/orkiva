@@ -24,6 +24,27 @@ export type OperatorCommand =
       json: boolean;
     }
   | {
+      kind: "assign-escalation-owner";
+      threadId: string;
+      ownerAgentId: string;
+      reason: string;
+      actorAgentId: string;
+      json: boolean;
+    }
+  | {
+      kind: "reassign-escalation-owner";
+      threadId: string;
+      ownerAgentId: string;
+      reason: string;
+      actorAgentId: string;
+      json: boolean;
+    }
+  | {
+      kind: "get-escalation-owner";
+      threadId: string;
+      json: boolean;
+    }
+  | {
       kind: "override-close-thread";
       threadId: string;
       reason: string;
@@ -115,7 +136,7 @@ export const parseOperatorCommand = (argv: readonly string[]): OperatorCommand =
   const [commandName, ...rest] = argv;
   if (commandName === undefined) {
     throw new Error(
-      "Missing command. Expected inspect-thread | escalate-thread | unblock-thread | override-close-thread"
+      "Missing command. Expected inspect-thread | escalate-thread | unblock-thread | assign-escalation-owner | reassign-escalation-owner | get-escalation-owner | override-close-thread"
     );
   }
 
@@ -158,6 +179,36 @@ export const parseOperatorCommand = (argv: readonly string[]): OperatorCommand =
       threadId: readRequiredString(options, "thread-id"),
       reason: readRequiredString(options, "reason"),
       actorAgentId: readActorAgentId(options),
+      json
+    };
+  }
+
+  if (commandName === "assign-escalation-owner") {
+    return {
+      kind: "assign-escalation-owner",
+      threadId: readRequiredString(options, "thread-id"),
+      ownerAgentId: readRequiredString(options, "owner-agent-id"),
+      reason: readRequiredString(options, "reason"),
+      actorAgentId: readActorAgentId(options),
+      json
+    };
+  }
+
+  if (commandName === "reassign-escalation-owner") {
+    return {
+      kind: "reassign-escalation-owner",
+      threadId: readRequiredString(options, "thread-id"),
+      ownerAgentId: readRequiredString(options, "owner-agent-id"),
+      reason: readRequiredString(options, "reason"),
+      actorAgentId: readActorAgentId(options),
+      json
+    };
+  }
+
+  if (commandName === "get-escalation-owner") {
+    return {
+      kind: "get-escalation-owner",
+      threadId: readRequiredString(options, "thread-id"),
       json
     };
   }

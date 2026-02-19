@@ -12,6 +12,9 @@ Usage:
   operator-cli inspect-thread --thread-id <id> [--limit-messages <n>] [--limit-triggers <n>] [--json]
   operator-cli escalate-thread --thread-id <id> --reason <text> [--actor-agent-id <agent>] [--json]
   operator-cli unblock-thread --thread-id <id> --reason <text> [--actor-agent-id <agent>] [--json]
+  operator-cli assign-escalation-owner --thread-id <id> --owner-agent-id <agent> --reason <text> [--actor-agent-id <agent>] [--json]
+  operator-cli reassign-escalation-owner --thread-id <id> --owner-agent-id <agent> --reason <text> [--actor-agent-id <agent>] [--json]
+  operator-cli get-escalation-owner --thread-id <id> [--json]
   operator-cli override-close-thread --thread-id <id> --reason <human_override:...> [--actor-agent-id <agent>] [--json]
 `.trim();
   process.stdout.write(`${usage}\n`);

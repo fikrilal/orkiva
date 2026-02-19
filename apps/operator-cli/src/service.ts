@@ -1,6 +1,6 @@
 import { auditEvents, threads, type DbClient } from "@orkiva/db";
 import { canTransitionThreadStatus, type ThreadStatus } from "@orkiva/domain";
-import { and, desc, eq } from "drizzle-orm";
+import { and, desc, eq, isNull } from "drizzle-orm";
 
 import type { OperatorCommand } from "./commands.js";
 
@@ -12,6 +12,9 @@ export interface ThreadRecord {
   title: string;
   type: "conversation" | "workflow" | "incident";
   status: ThreadStatus;
+  escalationOwnerAgentId: string | null;
+  escalationAssignedByAgentId: string | null;
+  escalationAssignedAt: Date | null;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -70,6 +73,15 @@ export interface OperatorRepository {
     nextStatus: ThreadStatus;
     updatedAt: Date;
   }): Promise<ThreadRecord | null>;
+  updateEscalationOwner(input: {
+    threadId: string;
+    expectedCurrentStatus: ThreadStatus;
+    expectedCurrentOwnerAgentId: string | null;
+    nextOwnerAgentId: string;
+    assignedByAgentId: string;
+    assignedAt: Date;
+    updatedAt: Date;
+  }): Promise<ThreadRecord | null>;
   appendAuditEvent(input: {
     workspaceId: string;
     actorAgentId: string;
@@ -95,6 +107,9 @@ export class DbOperatorRepository implements OperatorRepository {
         title: true,
         type: true,
         status: true,
+        escalationOwnerAgentId: true,
+        escalationAssignedByAgentId: true,
+        escalationAssignedAt: true,
         createdAt: true,
         updatedAt: true
       }
@@ -160,10 +175,18 @@ export class DbOperatorRepository implements OperatorRepository {
     nextStatus: ThreadStatus;
     updatedAt: Date;
   }): Promise<ThreadRecord | null> {
+    const shouldClearEscalationOwner = input.nextStatus !== "blocked";
     const updated = await this.db
       .update(threads)
       .set({
         status: input.nextStatus,
+        ...(shouldClearEscalationOwner
+          ? {
+              escalationOwnerAgentId: null,
+              escalationAssignedByAgentId: null,
+              escalationAssignedAt: null
+            }
+          : {}),
         updatedAt: input.updatedAt
       })
       .where(
@@ -175,6 +198,55 @@ export class DbOperatorRepository implements OperatorRepository {
         title: threads.title,
         type: threads.type,
         status: threads.status,
+        escalationOwnerAgentId: threads.escalationOwnerAgentId,
+        escalationAssignedByAgentId: threads.escalationAssignedByAgentId,
+        escalationAssignedAt: threads.escalationAssignedAt,
+        createdAt: threads.createdAt,
+        updatedAt: threads.updatedAt
+      });
+    return updated[0] ?? null;
+  }
+
+  public async updateEscalationOwner(input: {
+    threadId: string;
+    expectedCurrentStatus: ThreadStatus;
+    expectedCurrentOwnerAgentId: string | null;
+    nextOwnerAgentId: string;
+    assignedByAgentId: string;
+    assignedAt: Date;
+    updatedAt: Date;
+  }): Promise<ThreadRecord | null> {
+    const whereClause =
+      input.expectedCurrentOwnerAgentId === null
+        ? and(
+            eq(threads.threadId, input.threadId),
+            eq(threads.status, input.expectedCurrentStatus),
+            isNull(threads.escalationOwnerAgentId)
+          )
+        : and(
+            eq(threads.threadId, input.threadId),
+            eq(threads.status, input.expectedCurrentStatus),
+            eq(threads.escalationOwnerAgentId, input.expectedCurrentOwnerAgentId)
+          );
+
+    const updated = await this.db
+      .update(threads)
+      .set({
+        escalationOwnerAgentId: input.nextOwnerAgentId,
+        escalationAssignedByAgentId: input.assignedByAgentId,
+        escalationAssignedAt: input.assignedAt,
+        updatedAt: input.updatedAt
+      })
+      .where(whereClause)
+      .returning({
+        threadId: threads.threadId,
+        workspaceId: threads.workspaceId,
+        title: threads.title,
+        type: threads.type,
+        status: threads.status,
+        escalationOwnerAgentId: threads.escalationOwnerAgentId,
+        escalationAssignedByAgentId: threads.escalationAssignedByAgentId,
+        escalationAssignedAt: threads.escalationAssignedAt,
         createdAt: threads.createdAt,
         updatedAt: threads.updatedAt
       });
@@ -214,9 +286,6 @@ export interface OperatorCliServiceResult {
   data: Record<string, unknown>;
 }
 
-const requiresOverrideReason = (currentStatus: ThreadStatus, nextStatus: ThreadStatus): boolean =>
-  currentStatus === "blocked" && nextStatus === "closed";
-
 const hasOverrideReason = (reason: string): boolean =>
   OVERRIDE_REASON_PREFIXES.some((prefix) => reason.startsWith(prefix));
 
@@ -232,6 +301,19 @@ export class OperatorCliService {
       throw new OperatorCliError(
         "WORKSPACE_MISMATCH",
         `Thread workspace mismatch: expected=${this.workspaceId} actual=${thread.workspaceId}`
+      );
+    }
+  }
+
+  private async assertOwnerAgentIsThreadParticipant(
+    threadId: string,
+    ownerAgentId: string
+  ): Promise<void> {
+    const participants = await this.repository.listParticipants(threadId);
+    if (!participants.includes(ownerAgentId)) {
+      throw new OperatorCliError(
+        "INVALID_ARGUMENT",
+        `Escalation owner must be a thread participant: ${ownerAgentId}`
       );
     }
   }
@@ -262,6 +344,9 @@ export class OperatorCliService {
           from_status: existing.status,
           to_status: input.nextStatus,
           reason: input.reason,
+          escalation_owner_agent_id: existing.escalationOwnerAgentId ?? null,
+          escalation_assigned_by_agent_id: existing.escalationAssignedByAgentId ?? null,
+          escalation_assigned_at: existing.escalationAssignedAt?.toISOString() ?? null,
           noop: true
         },
         createdAt: this.now()
@@ -285,13 +370,19 @@ export class OperatorCliService {
       );
     }
 
-    if (
-      requiresOverrideReason(existing.status, input.nextStatus) &&
-      !hasOverrideReason(input.reason)
-    ) {
+    const owner = existing.escalationOwnerAgentId;
+    const hasAssignedOwner = owner !== null;
+    const isActorEscalationOwner = hasAssignedOwner && owner === input.actorAgentId;
+    const isBlockedToActive = existing.status === "blocked" && input.nextStatus === "active";
+    const isBlockedToClosed = existing.status === "blocked" && input.nextStatus === "closed";
+    const mustUseOverrideReason =
+      (isBlockedToClosed && !isActorEscalationOwner) ||
+      (isBlockedToActive && hasAssignedOwner && !isActorEscalationOwner);
+
+    if (mustUseOverrideReason && !hasOverrideReason(input.reason)) {
       throw new OperatorCliError(
         "OVERRIDE_REQUIRED",
-        "Closing a blocked thread requires reason prefix human_override: or coordinator_override:"
+        "Blocked thread transition requires escalation owner or reason prefix human_override: or coordinator_override:"
       );
     }
 
@@ -319,7 +410,10 @@ export class OperatorCliService {
       payload: {
         from_status: existing.status,
         to_status: updated.status,
-        reason: input.reason
+        reason: input.reason,
+        escalation_owner_agent_id_before: existing.escalationOwnerAgentId,
+        escalation_owner_agent_id_after: updated.escalationOwnerAgentId,
+        override_used: hasOverrideReason(input.reason)
       },
       createdAt: this.now()
     });
@@ -332,6 +426,93 @@ export class OperatorCliService {
         thread_id: updated.threadId,
         status: updated.status,
         changed: true
+      }
+    };
+  }
+
+  private async assignEscalationOwner(input: {
+    threadId: string;
+    ownerAgentId: string;
+    reason: string;
+    actorAgentId: string;
+    operation: "assign-escalation-owner" | "reassign-escalation-owner";
+  }): Promise<OperatorCliServiceResult> {
+    const existing = await this.repository.getThreadById(input.threadId);
+    if (existing === null) {
+      throw new OperatorCliError("NOT_FOUND", `Thread not found: ${input.threadId}`);
+    }
+    this.assertThreadInWorkspace(existing);
+
+    if (existing.status !== "blocked") {
+      throw new OperatorCliError(
+        "INVALID_TRANSITION",
+        "Escalation owner assignment is only allowed when thread status is blocked"
+      );
+    }
+
+    const currentOwner = existing.escalationOwnerAgentId;
+    const isAssignOperation = input.operation === "assign-escalation-owner";
+    if (isAssignOperation && currentOwner !== null) {
+      throw new OperatorCliError(
+        "CONFLICT",
+        `Escalation owner already assigned: ${currentOwner}. Use reassign-escalation-owner.`
+      );
+    }
+    if (!isAssignOperation && currentOwner === null) {
+      throw new OperatorCliError(
+        "INVALID_ARGUMENT",
+        "No escalation owner is currently assigned. Use assign-escalation-owner first."
+      );
+    }
+
+    await this.assertOwnerAgentIsThreadParticipant(existing.threadId, input.ownerAgentId);
+
+    const eventAt = this.now();
+    const updated = await this.repository.updateEscalationOwner({
+      threadId: existing.threadId,
+      expectedCurrentStatus: "blocked",
+      expectedCurrentOwnerAgentId: currentOwner,
+      nextOwnerAgentId: input.ownerAgentId,
+      assignedByAgentId: input.actorAgentId,
+      assignedAt: eventAt,
+      updatedAt: eventAt
+    });
+    if (updated === null) {
+      throw new OperatorCliError(
+        "CONFLICT",
+        "Escalation owner changed concurrently; retry command with fresh state"
+      );
+    }
+
+    await this.repository.appendAuditEvent({
+      workspaceId: updated.workspaceId,
+      actorAgentId: input.actorAgentId,
+      operation: input.operation,
+      resourceType: "thread",
+      resourceId: updated.threadId,
+      threadId: updated.threadId,
+      result: "success",
+      payload: {
+        reason: input.reason,
+        previous_owner_agent_id: currentOwner,
+        new_owner_agent_id: updated.escalationOwnerAgentId,
+        escalation_assigned_by_agent_id: updated.escalationAssignedByAgentId,
+        escalation_assigned_at: updated.escalationAssignedAt?.toISOString() ?? null
+      },
+      createdAt: eventAt
+    });
+
+    return {
+      ok: true,
+      command: input.operation,
+      happenedAt: eventAt.toISOString(),
+      data: {
+        thread_id: updated.threadId,
+        status: updated.status,
+        escalation_owner_agent_id: updated.escalationOwnerAgentId,
+        escalation_assigned_by_agent_id: updated.escalationAssignedByAgentId,
+        escalation_assigned_at: updated.escalationAssignedAt?.toISOString() ?? null,
+        changed: currentOwner !== updated.escalationOwnerAgentId
       }
     };
   }
@@ -381,6 +562,47 @@ export class OperatorCliService {
         actorAgentId: command.actorAgentId,
         operation: command.kind
       });
+    }
+
+    if (command.kind === "assign-escalation-owner") {
+      return this.assignEscalationOwner({
+        threadId: command.threadId,
+        ownerAgentId: command.ownerAgentId,
+        reason: command.reason,
+        actorAgentId: command.actorAgentId,
+        operation: command.kind
+      });
+    }
+
+    if (command.kind === "reassign-escalation-owner") {
+      return this.assignEscalationOwner({
+        threadId: command.threadId,
+        ownerAgentId: command.ownerAgentId,
+        reason: command.reason,
+        actorAgentId: command.actorAgentId,
+        operation: command.kind
+      });
+    }
+
+    if (command.kind === "get-escalation-owner") {
+      const thread = await this.repository.getThreadById(command.threadId);
+      if (thread === null) {
+        throw new OperatorCliError("NOT_FOUND", `Thread not found: ${command.threadId}`);
+      }
+      this.assertThreadInWorkspace(thread);
+
+      return {
+        ok: true,
+        command: command.kind,
+        happenedAt: this.now().toISOString(),
+        data: {
+          thread_id: thread.threadId,
+          status: thread.status,
+          escalation_owner_agent_id: thread.escalationOwnerAgentId,
+          escalation_assigned_by_agent_id: thread.escalationAssignedByAgentId,
+          escalation_assigned_at: thread.escalationAssignedAt?.toISOString() ?? null
+        }
+      };
     }
 
     return this.transitionThreadStatus({

@@ -54,6 +54,9 @@ Baseline commands:
 - SLI baseline refresh: `tool/agent/pnpmw --no-stdin run ops:sli:pilot`
 - Inspect thread: `tool/agent/pnpmw --no-stdin run dev:operator-cli -- inspect-thread --thread-id <id> --json`
 - Escalate thread: `tool/agent/pnpmw --no-stdin run dev:operator-cli -- escalate-thread --thread-id <id> --reason <text>`
+- Assign escalation owner: `tool/agent/pnpmw --no-stdin run dev:operator-cli -- assign-escalation-owner --thread-id <id> --owner-agent-id <agent> --reason <text>`
+- Reassign escalation owner: `tool/agent/pnpmw --no-stdin run dev:operator-cli -- reassign-escalation-owner --thread-id <id> --owner-agent-id <agent> --reason <text>`
+- Get escalation owner: `tool/agent/pnpmw --no-stdin run dev:operator-cli -- get-escalation-owner --thread-id <id> --json`
 - Unblock thread: `tool/agent/pnpmw --no-stdin run dev:operator-cli -- unblock-thread --thread-id <id> --reason <text>`
 - Override close: `tool/agent/pnpmw --no-stdin run dev:operator-cli -- override-close-thread --thread-id <id> --reason human_override:<text>`
 

@@ -64,9 +64,53 @@ class InMemoryOperatorRepository implements OperatorRepository {
       return Promise.resolve(null);
     }
 
+    const updated: ThreadRecord =
+      input.nextStatus === "blocked"
+        ? {
+            ...current,
+            status: input.nextStatus,
+            updatedAt: input.updatedAt
+          }
+        : {
+            threadId: current.threadId,
+            workspaceId: current.workspaceId,
+            title: current.title,
+            type: current.type,
+            status: input.nextStatus,
+            escalationOwnerAgentId: null,
+            escalationAssignedByAgentId: null,
+            escalationAssignedAt: null,
+            createdAt: current.createdAt,
+            updatedAt: input.updatedAt
+          };
+    this.threads.set(input.threadId, updated);
+    return Promise.resolve(updated);
+  }
+
+  public updateEscalationOwner(input: {
+    threadId: string;
+    expectedCurrentStatus: "active" | "blocked" | "resolved" | "closed";
+    expectedCurrentOwnerAgentId: string | null;
+    nextOwnerAgentId: string;
+    assignedByAgentId: string;
+    assignedAt: Date;
+    updatedAt: Date;
+  }): Promise<ThreadRecord | null> {
+    const current = this.threads.get(input.threadId);
+    if (current === undefined || current.status !== input.expectedCurrentStatus) {
+      return Promise.resolve(null);
+    }
+
+    const currentOwner = current.escalationOwnerAgentId;
+    if (currentOwner !== input.expectedCurrentOwnerAgentId) {
+      return Promise.resolve(null);
+    }
+
     const updated: ThreadRecord = {
       ...current,
-      status: input.nextStatus,
+      escalationOwnerAgentId: input.nextOwnerAgentId,
+      escalationAssignedByAgentId: input.assignedByAgentId,
+      escalationAssignedAt: input.assignedAt,
       updatedAt: input.updatedAt
     };
     this.threads.set(input.threadId, updated);
@@ -123,6 +167,28 @@ describe("operator-cli parser", () => {
   it("rejects unknown command", () => {
     expect(() => parseOperatorCommand(["unknown-command"])).toThrow("Unknown command");
   });
+
+  it("parses assign-escalation-owner command", () => {
+    const parsed = parseOperatorCommand([
+      "assign-escalation-owner",
+      "--thread-id",
+      "th_01",
+      "--owner-agent-id",
+      "reviewer_agent",
+      "--reason",
+      "manual_assignment:critical",
+      "--actor-agent-id",
+      "coordinator_agent"
+    ]);
+    expect(parsed).toEqual({
+      kind: "assign-escalation-owner",
+      threadId: "th_01",
+      ownerAgentId: "reviewer_agent",
+      reason: "manual_assignment:critical",
+      actorAgentId: "coordinator_agent",
+      json: false
+    });
+  });
 });
 
 describe("operator-cli service", () => {
@@ -134,6 +200,9 @@ describe("operator-cli service", () => {
     title: "Workflow",
     type: "workflow",
     status: "active",
+    escalationOwnerAgentId: null,
+    escalationAssignedByAgentId: null,
+    escalationAssignedAt: null,
     createdAt: now,
     updatedAt: now
   });
@@ -221,7 +290,180 @@ describe("operator-cli service", () => {
     ).rejects.toEqual(
       new OperatorCliError(
         "OVERRIDE_REQUIRED",
-        "Closing a blocked thread requires reason prefix human_override: or coordinator_override:"
+        "Blocked thread transition requires escalation owner or reason prefix human_override: or coordinator_override:"
+      )
+    );
+  });
+
+  it("supports escalation owner assignment and owner-led unblock", async () => {
+    const repo = new InMemoryOperatorRepository();
+    repo.seed({
+      thread: {
+        ...seedThread(),
+        status: "blocked"
+      },
+      participants: ["reviewer_agent", "executioner_agent"]
+    });
+    const service = new OperatorCliService(repo, "wk_01", () => now);
+
+    const assigned = await service.execute({
+      kind: "assign-escalation-owner",
+      threadId: "th_01",
+      ownerAgentId: "reviewer_agent",
+      reason: "manual_assignment:ownership",
+      actorAgentId: "coordinator_agent",
+      json: true
+    });
+    expect(assigned.ok).toBe(true);
+    expect(assigned.data["escalation_owner_agent_id"]).toBe("reviewer_agent");
+
+    const ownerRead = await service.execute({
+      kind: "get-escalation-owner",
+      threadId: "th_01",
+      json: true
+    });
+    expect(ownerRead.data["escalation_owner_agent_id"]).toBe("reviewer_agent");
+
+    const unblocked = await service.execute({
+      kind: "unblock-thread",
+      threadId: "th_01",
+      reason: "owner_acknowledged_resolution",
+      actorAgentId: "reviewer_agent",
+      json: true
+    });
+    expect(unblocked.data["status"]).toBe("active");
+
+    const ownerAfterUnblock = await service.execute({
+      kind: "get-escalation-owner",
+      threadId: "th_01",
+      json: true
+    });
+    expect(ownerAfterUnblock.data["escalation_owner_agent_id"]).toBeNull();
+  });
+
+  it("rejects non-owner unblock without override and allows override", async () => {
+    const repo = new InMemoryOperatorRepository();
+    repo.seed({
+      thread: {
+        ...seedThread(),
+        status: "blocked",
+        escalationOwnerAgentId: "reviewer_agent",
+        escalationAssignedByAgentId: "coordinator_agent",
+        escalationAssignedAt: now
+      },
+      participants: ["reviewer_agent", "executioner_agent"]
+    });
+    const service = new OperatorCliService(repo, "wk_01", () => now);
+
+    await expect(
+      service.execute({
+        kind: "unblock-thread",
+        threadId: "th_01",
+        reason: "normal_unblock_attempt",
+        actorAgentId: "executioner_agent",
+        json: true
+      })
+    ).rejects.toEqual(
+      new OperatorCliError(
+        "OVERRIDE_REQUIRED",
+        "Blocked thread transition requires escalation owner or reason prefix human_override: or coordinator_override:"
+      )
+    );
+
+    const overridden = await service.execute({
+      kind: "unblock-thread",
+      threadId: "th_01",
+      reason: "human_override:manual_intervention",
+      actorAgentId: "executioner_agent",
+      json: true
+    });
+    expect(overridden.data["status"]).toBe("active");
+  });
+
+  it("enforces assign/reassign escalation owner preconditions", async () => {
+    const repo = new InMemoryOperatorRepository();
+    repo.seed({
+      thread: {
+        ...seedThread(),
+        status: "blocked"
+      },
+      participants: ["reviewer_agent", "security_agent", "executioner_agent"]
+    });
+    const service = new OperatorCliService(repo, "wk_01", () => now);
+
+    await expect(
+      service.execute({
+        kind: "reassign-escalation-owner",
+        threadId: "th_01",
+        ownerAgentId: "security_agent",
+        reason: "handoff",
+        actorAgentId: "coordinator_agent",
+        json: true
+      })
+    ).rejects.toEqual(
+      new OperatorCliError(
+        "INVALID_ARGUMENT",
+        "No escalation owner is currently assigned. Use assign-escalation-owner first."
+      )
+    );
+
+    await service.execute({
+      kind: "assign-escalation-owner",
+      threadId: "th_01",
+      ownerAgentId: "reviewer_agent",
+      reason: "initial_assignment",
+      actorAgentId: "coordinator_agent",
+      json: true
+    });
+
+    await expect(
+      service.execute({
+        kind: "assign-escalation-owner",
+        threadId: "th_01",
+        ownerAgentId: "executioner_agent",
+        reason: "duplicate_assignment",
+        actorAgentId: "coordinator_agent",
+        json: true
+      })
+    ).rejects.toEqual(
+      new OperatorCliError(
+        "CONFLICT",
+        "Escalation owner already assigned: reviewer_agent. Use reassign-escalation-owner."
+      )
+    );
+
+    const reassigned = await service.execute({
+      kind: "reassign-escalation-owner",
+      threadId: "th_01",
+      ownerAgentId: "security_agent",
+      reason: "handoff_security_review",
+      actorAgentId: "coordinator_agent",
+      json: true
+    });
+    expect(reassigned.data["escalation_owner_agent_id"]).toBe("security_agent");
+  });
+
+  it("rejects owner assignment when thread is not blocked", async () => {
+    const repo = new InMemoryOperatorRepository();
+    repo.seed({
+      thread: seedThread(),
+      participants: ["reviewer_agent"]
+    });
+    const service = new OperatorCliService(repo, "wk_01", () => now);
+
+    await expect(
+      service.execute({
+        kind: "assign-escalation-owner",
+        threadId: "th_01",
+        ownerAgentId: "reviewer_agent",
+        reason: "attempt_while_active",
+        actorAgentId: "coordinator_agent",
+        json: true
+      })
+    ).rejects.toEqual(
+      new OperatorCliError(
+        "INVALID_TRANSITION",
+        "Escalation owner assignment is only allowed when thread status is blocked"
       )
     );
   });

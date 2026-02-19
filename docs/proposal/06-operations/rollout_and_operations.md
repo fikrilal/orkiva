@@ -78,6 +78,9 @@ Published artifacts:
 Operator CLI baseline (MVP):
 - `inspect-thread --thread-id <id>` for thread/participant/message/trigger inspection.
 - `escalate-thread --thread-id <id> --reason <text>` to transition a thread to `blocked`.
+- `assign-escalation-owner --thread-id <id> --owner-agent-id <agent> --reason <text>` to assign escalation ownership for blocked threads.
+- `reassign-escalation-owner --thread-id <id> --owner-agent-id <agent> --reason <text>` to transfer escalation ownership while blocked.
+- `get-escalation-owner --thread-id <id>` to read current escalation owner state.
 - `unblock-thread --thread-id <id> --reason <text>` to transition a thread back to `active`.
 - `override-close-thread --thread-id <id> --reason <human_override:...>` for explicit close overrides.
 - All mutable operations append audit events with operator actor identity.

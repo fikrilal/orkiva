@@ -115,7 +115,6 @@ Done when: go-live checklist is signed off with known risks, rollback plan, and 
 
 - No detailed ticket-level subtasks yet
 - No effort estimates yet
-- No owner assignment yet
 
 ## Source References
 
