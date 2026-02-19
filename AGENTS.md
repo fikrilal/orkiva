@@ -5,40 +5,32 @@ It is intentionally strict: consistency, safety, and long-term maintainability a
 
 If a change modifies behavior, architecture, protocol, or governance policy, update the docs in the same change.
 
-## 1) Read First (Mandatory)
+## 1) Pre-Change Context (Mandatory)
 
-Before coding, read the relevant source-of-truth docs:
+Before making changes, do this in order:
 
-- Docs index: `docs/proposal/README.md`
-- Product/requirements: `docs/proposal/01-product/prd.md`
-- Solution architecture: `docs/proposal/02-architecture/solution_architecture.md`
-- Stack lock-ins: `docs/proposal/02-architecture/technical_stack_and_architecture.md`
-- Runtime trigger design: `docs/proposal/03-runtime/process_level_trigger_design.md`
-- tmux supervisor spec: `docs/proposal/03-runtime/tmux_supervisor_implementation_spec.md`
-- MCP/protocol contracts: `docs/proposal/04-protocol/protocol_spec.md`
-- MCP command catalog: `docs/proposal/04-protocol/mcp_command_catalog.md`
-- Security baseline: `docs/proposal/05-security/security_and_governance.md`
-- Delivery backlog: `docs/proposal/06-operations/implementation_backlog.md`
-- Locked decisions: `docs/proposal/07-decisions/open_questions.md`
+1. Open the docs index: `docs/proposal/README.md`.
+2. Read only the source-of-truth docs relevant to the area you will touch:
+   - Product/scope: `docs/proposal/01-product/prd.md`
+   - Architecture/boundaries: `docs/proposal/02-architecture/solution_architecture.md`, `docs/proposal/02-architecture/technical_stack_and_architecture.md`
+   - Runtime behavior: `docs/proposal/03-runtime/process_level_trigger_design.md`, `docs/proposal/03-runtime/tmux_supervisor_implementation_spec.md`
+   - Protocol/API contracts: `docs/proposal/04-protocol/protocol_spec.md`, `docs/proposal/04-protocol/mcp_command_catalog.md`
+   - Security/governance: `docs/proposal/05-security/security_and_governance.md`
+   - Backlog/decisions: `docs/proposal/06-operations/implementation_backlog.md`, `docs/proposal/07-decisions/open_questions.md`
+3. If requirements conflict or are ambiguous, stop and ask before implementing irreversible behavior.
 
-## 2) MVP Lock-Ins (Do Not Violate)
+## 2) MVP Lock-Ins (Agent Constraints)
 
-- Single-workspace trust domain only. Cross-workspace routing is rejected in MVP.
-- Hybrid orchestration: trigger-first with polling fallback.
-- Runtime wake order is fixed: managed live trigger -> `resume` (max 2) -> spawn with thread summary.
-- Managed runtime is required for autonomous trigger delivery.
-- Human-input collision defaults are fixed unless explicitly changed by decision:
-  - quiet window `20s`
-  - defer re-check `5s`
-  - max defer `60s`
-- Loop safeguards are fixed unless explicitly changed by decision:
-  - auto-block at `20` no-progress turns
-  - auto-block at `3` repeated-identical finding cycles
-- Personal MVP data policy is fixed:
-  - indefinite retention
-  - no automated content filtering/redaction pipeline
-- API major version baseline is `/v1`.
-- Message/event payloads must carry schema version fields (`schema_version`, `event_version` where relevant).
+Treat these as hard constraints unless a decision doc is updated in the same change:
+
+- Workspace scope: single-workspace trust domain only; reject cross-workspace routing.
+- Runtime orchestration: trigger-first with polling fallback; wake order is `managed live trigger -> resume (max 2) -> spawn with thread summary`.
+- Autonomous triggering: managed runtime required; unmanaged runtime must return deterministic fallback-required outcome.
+- Collision policy defaults are fixed: quiet `20s`, defer re-check `5s`, max defer `60s`.
+- Loop safeguards are fixed: auto-block at `20` no-progress turns or `3` repeated-identical finding cycles.
+- Personal MVP data policy is fixed: indefinite retention, no automated filtering/redaction pipeline.
+- API and payload versioning are fixed: major path `/v1`; payloads must carry `schema_version` and `event_version` where relevant.
+- If any lock-in must change, update decision/docs in the same PR; do not silently drift behavior.
 
 ## 3) Non-Negotiables (Hard Rules)
 
@@ -109,15 +101,23 @@ Boundary rules:
 - Acknowledgement confirmation should come from cursor progression and/or heartbeat updates.
 - Retries must be bounded with backoff, then fallback chain must execute.
 
-## 8) Coding Quality Standards
+## 8) Engineering Principles (Default)
 
-- Prefer explicit, readable control flow over implicit magic.
-- Keep modules cohesive and small; avoid god-classes/services.
-- Use domain-oriented naming; no vague names like `data`, `stuff`, `util2`.
-- Prefer value objects/enums over untyped stringly-typed state.
-- Write meaningful logs with correlation IDs, but never log secrets.
-- Handle failure paths deliberately; avoid swallowing errors.
-- Keep public interfaces minimal and stable.
+Apply these by default when making changes:
+
+- SOLID and DRY: keep responsibilities focused, depend on abstractions at boundaries, remove duplicated logic that can drift.
+- KISS: pick the simplest design that satisfies current requirements and remains understandable months later.
+- YAGNI: do not add speculative abstractions or extension points without a real second use case.
+- Separation of concerns: keep transport, domain, persistence, and integration concerns separated.
+- High cohesion, low coupling: keep modules internally focused and externally minimal.
+- Composition over inheritance: prefer small composable units to deep inheritance trees.
+- Law of Demeter: avoid chain-calling through internals of collaborators.
+- Command-query separation: keep side-effecting operations and data retrieval explicit.
+- Make invalid states hard to represent: use strict types, value objects, and validation at boundaries.
+- Favor explicit state transitions and immutability where practical.
+- Boundary robustness: external operations should be idempotent, timeout-bounded, retry-safe, and auditable.
+- Observability-first: emit structured logs/metrics/traces with correlation IDs for critical paths.
+- Least astonishment: prefer obvious behavior over clever behavior; avoid hidden coupling and magic defaults.
 
 ## 9) Testing and Verification (Required)
 
@@ -145,21 +145,7 @@ If runtime trigger behavior changes:
 
 If checks cannot run, explicitly state why and list the exact commands that should be run.
 
-## 10) Windows/WSL Tooling Policy
-
-This repo is commonly used from WSL on `/mnt/c/...`.
-Use wrapper scripts to avoid Linux/Windows artifact drift.
-
-- Preflight: `tool/agent/doctor`
-- Git: `tool/agent/gitw --no-stdin ...`
-- Node: `tool/agent/nodew --no-stdin ...`
-- PNPM: `tool/agent/pnpmw --no-stdin ...`
-- Docker: `tool/agent/dockw --no-stdin ...`
-- Generic wrapper: `tool/agent/winrun --no-stdin -- <command> ...`
-
-In agent automation and non-interactive flows, always use `--no-stdin`.
-
-## 11) Documentation and Decision Hygiene
+## 10) Documentation and Decision Hygiene
 
 Any change that affects behavior/spec/policy must update docs in the same change.
 
@@ -182,7 +168,7 @@ Update these files when relevant:
 
 If a lock-in is changed, update the decision register with rationale and date in the same PR.
 
-## 12) AI Agent Workflow (Required)
+## 11) AI Agent Workflow (Required)
 
 1. Read relevant docs first.
 2. State assumptions and risks before broad implementation.
@@ -191,7 +177,7 @@ If a lock-in is changed, update the decision register with rationale and date in
 5. Summarize changed files, risks, and follow-ups.
 6. Do not commit or push unless explicitly requested.
 
-## 13) Definition of Done
+## 12) Definition of Done
 
 A task is done only when all of the following are true:
 
