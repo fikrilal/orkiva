@@ -11,6 +11,7 @@ import {
   type ThreadStatus,
   type ThreadType
 } from "@orkiva/domain";
+import { normalizeMetadataForMessageKind } from "@orkiva/protocol";
 
 export interface ThreadRecord {
   threadId: string;
@@ -121,14 +122,6 @@ const buildThreadSummaryText = (
 
 const cursorKey = (threadId: string, agentId: string): string => `${threadId}::${agentId}`;
 
-const normalizeMetadata = (value: unknown): Record<string, unknown> | undefined => {
-  if (value === undefined || value === null || Array.isArray(value) || typeof value !== "object") {
-    return undefined;
-  }
-
-  return value as Record<string, unknown>;
-};
-
 const toMessageRecord = (row: {
   messageId: string;
   threadId: string;
@@ -143,7 +136,7 @@ const toMessageRecord = (row: {
   idempotencyKey: string | null;
   createdAt: Date;
 }): MessageRecord => {
-  const metadata = normalizeMetadata(row.metadata);
+  const metadata = normalizeMetadataForMessageKind(row.kind, row.metadata);
 
   return {
     messageId: row.messageId,
@@ -266,6 +259,7 @@ export class InMemoryThreadStore implements ThreadStore {
       createdAt: input.createdAt
     });
 
+    const normalizedMetadata = normalizeMetadataForMessageKind(message.kind, message.metadata);
     const record: MessageRecord = {
       messageId: message.messageId,
       threadId: message.threadId,
@@ -275,7 +269,7 @@ export class InMemoryThreadStore implements ThreadStore {
       senderSessionId: message.senderSessionId,
       kind: message.kind,
       body: message.body,
-      ...(message.metadata === undefined ? {} : { metadata: message.metadata }),
+      ...(normalizedMetadata === undefined ? {} : { metadata: normalizedMetadata }),
       ...(message.inReplyTo === undefined ? {} : { inReplyTo: message.inReplyTo }),
       ...(message.idempotencyKey === undefined ? {} : { idempotencyKey: message.idempotencyKey }),
       createdAt: message.createdAt
@@ -515,6 +509,7 @@ export class DbThreadStore implements ThreadStore {
       ...(input.idempotencyKey === undefined ? {} : { idempotencyKey: input.idempotencyKey }),
       createdAt: input.createdAt
     });
+    const normalizedMetadata = normalizeMetadataForMessageKind(message.kind, message.metadata);
 
     await this.db.insert(messages).values({
       messageId: message.messageId,
@@ -525,7 +520,7 @@ export class DbThreadStore implements ThreadStore {
       senderSessionId: message.senderSessionId,
       kind: message.kind,
       body: message.body,
-      ...(message.metadata === undefined ? {} : { metadata: message.metadata }),
+      ...(normalizedMetadata === undefined ? {} : { metadata: normalizedMetadata }),
       ...(message.inReplyTo === undefined ? {} : { inReplyTo: message.inReplyTo }),
       ...(message.idempotencyKey === undefined ? {} : { idempotencyKey: message.idempotencyKey }),
       createdAt: message.createdAt
@@ -540,7 +535,7 @@ export class DbThreadStore implements ThreadStore {
       senderSessionId: message.senderSessionId,
       kind: message.kind,
       body: message.body,
-      ...(message.metadata === undefined ? {} : { metadata: message.metadata }),
+      ...(normalizedMetadata === undefined ? {} : { metadata: normalizedMetadata }),
       ...(message.inReplyTo === undefined ? {} : { inReplyTo: message.inReplyTo }),
       ...(message.idempotencyKey === undefined ? {} : { idempotencyKey: message.idempotencyKey }),
       createdAt: message.createdAt

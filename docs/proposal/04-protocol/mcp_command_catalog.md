@@ -11,6 +11,7 @@ Scope:
 Versioning rule:
 - Expose all commands under `/v1`.
 - Payloads include `schema_version` where defined in protocol.
+- For `post_message` with `kind=event`, payload metadata includes `event_version` (default-normalized to `1` when omitted for compatibility).
 
 ### 2.1 Thread Commands
 1. `create_thread`

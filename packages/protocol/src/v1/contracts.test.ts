@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  CURRENT_EVENT_VERSION,
   CURRENT_MESSAGE_SCHEMA_VERSION,
   ackReadInputSchema,
   createThreadInputSchema,
@@ -8,6 +9,7 @@ import {
   postMessageInputSchema,
   protocolErrorResponseSchema,
   readMessagesInputSchema,
+  readMessagesOutputSchema,
   summarizeThreadInputSchema,
   triggerParticipantInputSchema,
   triggerParticipantOutputSchema,
@@ -54,6 +56,35 @@ describe("protocol v1 contracts", () => {
     expect(rejected.success).toBe(false);
   });
 
+  it("normalizes event_version for event messages", () => {
+    const parsed = postMessageInputSchema.parse({
+      thread_id: "th_01",
+      schema_version: CURRENT_MESSAGE_SCHEMA_VERSION,
+      kind: "event",
+      body: "event payload",
+      metadata: {
+        event_type: "finding_reported"
+      }
+    });
+
+    expect(parsed.kind).toBe("event");
+    expect(parsed.metadata?.["event_version"]).toBe(CURRENT_EVENT_VERSION);
+  });
+
+  it("rejects invalid metadata.event_version for event messages", () => {
+    const result = postMessageInputSchema.safeParse({
+      thread_id: "th_01",
+      schema_version: CURRENT_MESSAGE_SCHEMA_VERSION,
+      kind: "event",
+      body: "event payload",
+      metadata: {
+        event_type: "finding_reported",
+        event_version: 0
+      }
+    });
+    expect(result.success).toBe(false);
+  });
+
   it("applies read_messages defaults", () => {
     const parsed = readMessagesInputSchema.parse({
       thread_id: "th_01"
@@ -61,6 +92,34 @@ describe("protocol v1 contracts", () => {
 
     expect(parsed.since_seq).toBe(0);
     expect(parsed.limit).toBe(50);
+  });
+
+  it("normalizes event_version in read_messages output payload", () => {
+    const parsed = readMessagesOutputSchema.parse({
+      messages: [
+        {
+          message_id: "msg_01",
+          schema_version: CURRENT_MESSAGE_SCHEMA_VERSION,
+          seq: 1,
+          kind: "event",
+          body: "event body",
+          metadata: {
+            event_type: "finding_reported"
+          },
+          sender_agent_id: "agent_a",
+          created_at: "2026-02-18T10:00:00.000Z"
+        }
+      ],
+      next_seq: 1,
+      has_more: false
+    });
+
+    const first = parsed.messages[0];
+    expect(first?.kind).toBe("event");
+    if (first?.kind !== "event") {
+      return;
+    }
+    expect(first.metadata["event_version"]).toBe(CURRENT_EVENT_VERSION);
   });
 
   it("validates ack_read input constraints", () => {

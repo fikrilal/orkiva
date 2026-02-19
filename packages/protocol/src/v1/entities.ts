@@ -1,11 +1,13 @@
 import { z } from "zod";
 
 import {
+  hasExplicitInvalidEventVersion,
   isoDatetimeSchema,
   messageSchemaVersionSchema,
   metadataSchema,
   nonEmptyStringSchema,
   nonNegativeIntSchema,
+  normalizeEventMetadata,
   positiveIntSchema
 } from "./common.js";
 
@@ -27,20 +29,43 @@ export const threadEntitySchema = z.object({
   updated_at: isoDatetimeSchema
 });
 
-export const messageEntitySchema = z.object({
+const messageEntityBaseSchema = z.object({
   message_id: nonEmptyStringSchema,
   thread_id: nonEmptyStringSchema,
   schema_version: messageSchemaVersionSchema,
   seq: positiveIntSchema,
   sender_agent_id: nonEmptyStringSchema,
   sender_session_id: nonEmptyStringSchema,
-  kind: messageKindSchema,
   body: nonEmptyStringSchema,
   metadata: metadataSchema.optional(),
   in_reply_to: nonEmptyStringSchema.optional(),
   idempotency_key: nonEmptyStringSchema.optional(),
   created_at: isoDatetimeSchema
 });
+
+const eventMessageEntitySchema = messageEntityBaseSchema
+  .extend({
+    kind: z.literal("event")
+  })
+  .superRefine((message, ctx) => {
+    if (hasExplicitInvalidEventVersion(message.metadata)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["metadata", "event_version"],
+        message: '"metadata.event_version" must be a positive integer'
+      });
+    }
+  })
+  .transform((message) => ({
+    ...message,
+    metadata: normalizeEventMetadata(message.metadata)
+  }));
+
+const nonEventMessageEntitySchema = messageEntityBaseSchema.extend({
+  kind: z.enum(["chat", "system"])
+});
+
+export const messageEntitySchema = z.union([eventMessageEntitySchema, nonEventMessageEntitySchema]);
 
 export const participantCursorEntitySchema = z.object({
   thread_id: nonEmptyStringSchema,

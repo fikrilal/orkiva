@@ -903,6 +903,11 @@ describe("bridge-api phase 4-8", () => {
     expect(secondPayload.messages).toHaveLength(1);
     expect(secondPayload.messages[0]?.seq).toBe(2);
     expect(secondPayload.messages[0]?.body).toBe("message-two");
+    if (secondPayload.messages[0]?.kind !== "event") {
+      throw new Error("Expected event message in second page");
+    }
+    expect(secondPayload.messages[0].metadata["event_type"]).toBe("update");
+    expect(secondPayload.messages[0].metadata["event_version"]).toBe(1);
     expect(secondPayload.next_seq).toBe(2);
     expect(secondPayload.has_more).toBe(false);
 
@@ -996,6 +1001,109 @@ describe("bridge-api phase 4-8", () => {
     expect(conflict.statusCode).toBe(409);
     const conflictPayload = protocolErrorResponseSchema.parse(conflict.json());
     expect(conflictPayload.error.code).toBe("IDEMPOTENCY_CONFLICT");
+  });
+
+  it("normalizes event_version defaults and rejects invalid event_version", async () => {
+    const app = createTestApp();
+    appsToClose.push(app);
+
+    await app.inject({
+      method: "POST",
+      url: "/v1/mcp/create_thread",
+      headers: {
+        authorization: "Bearer coordinator_wk1"
+      },
+      payload: {
+        workspace_id: "wk_01",
+        title: "event version thread",
+        type: "workflow",
+        participants: ["participant_agent", "coordinator_agent"]
+      }
+    });
+
+    const firstPost = await app.inject({
+      method: "POST",
+      url: "/v1/mcp/post_message",
+      headers: {
+        authorization: "Bearer participant_wk1"
+      },
+      payload: {
+        thread_id: "th_fixed-id",
+        schema_version: 1,
+        kind: "event",
+        body: "event payload",
+        metadata: {
+          event_type: "finding_reported"
+        },
+        idempotency_key: "event_version_idem_01"
+      }
+    });
+    expect(firstPost.statusCode).toBe(200);
+    const firstPayload = postMessageOutputSchema.parse(firstPost.json());
+
+    const replayWithExplicitVersion = await app.inject({
+      method: "POST",
+      url: "/v1/mcp/post_message",
+      headers: {
+        authorization: "Bearer participant_wk1"
+      },
+      payload: {
+        thread_id: "th_fixed-id",
+        schema_version: 1,
+        kind: "event",
+        body: "event payload",
+        metadata: {
+          event_type: "finding_reported",
+          event_version: 1
+        },
+        idempotency_key: "event_version_idem_01"
+      }
+    });
+    expect(replayWithExplicitVersion.statusCode).toBe(200);
+    const replayPayload = postMessageOutputSchema.parse(replayWithExplicitVersion.json());
+    expect(replayPayload.message_id).toBe(firstPayload.message_id);
+    expect(replayPayload.seq).toBe(firstPayload.seq);
+
+    const read = await app.inject({
+      method: "POST",
+      url: "/v1/mcp/read_messages",
+      headers: {
+        authorization: "Bearer coordinator_wk1"
+      },
+      payload: {
+        thread_id: "th_fixed-id",
+        since_seq: 0,
+        limit: 10
+      }
+    });
+    expect(read.statusCode).toBe(200);
+    const readPayload = readMessagesOutputSchema.parse(read.json());
+    expect(readPayload.messages).toHaveLength(1);
+    if (readPayload.messages[0]?.kind !== "event") {
+      throw new Error("Expected event message");
+    }
+    expect(readPayload.messages[0].metadata["event_version"]).toBe(1);
+
+    const invalidVersion = await app.inject({
+      method: "POST",
+      url: "/v1/mcp/post_message",
+      headers: {
+        authorization: "Bearer participant_wk1"
+      },
+      payload: {
+        thread_id: "th_fixed-id",
+        schema_version: 1,
+        kind: "event",
+        body: "invalid event payload",
+        metadata: {
+          event_type: "finding_reported",
+          event_version: 0
+        }
+      }
+    });
+    expect(invalidVersion.statusCode).toBe(400);
+    const invalidVersionPayload = protocolErrorResponseSchema.parse(invalidVersion.json());
+    expect(invalidVersionPayload.error.code).toBe("INVALID_ARGUMENT");
   });
 
   it("handles concurrent duplicate post_message retries without duplicate writes", async () => {

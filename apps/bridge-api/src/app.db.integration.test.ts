@@ -191,6 +191,86 @@ describeDb("bridge-api db integration", () => {
     expect(cursor.rows[0]?.last_read_seq).toBe("1");
   });
 
+  it("normalizes event_version for persisted event messages", async () => {
+    const createThread = await app.inject({
+      method: "POST",
+      url: "/v1/mcp/create_thread",
+      headers: {
+        authorization: "Bearer coordinator_wk1"
+      },
+      payload: {
+        workspace_id: "wk_01",
+        title: "db event version thread",
+        type: "workflow",
+        participants: ["participant_agent", "coordinator_agent"]
+      }
+    });
+    expect(createThread.statusCode).toBe(200);
+    createThreadOutputSchema.parse(createThread.json());
+
+    const firstPost = await app.inject({
+      method: "POST",
+      url: "/v1/mcp/post_message",
+      headers: {
+        authorization: "Bearer participant_wk1"
+      },
+      payload: {
+        thread_id: "th_fixed-id",
+        schema_version: 1,
+        kind: "event",
+        body: "event payload from postgres",
+        metadata: {
+          event_type: "finding_reported"
+        },
+        idempotency_key: "idem_event_db_01"
+      }
+    });
+    expect(firstPost.statusCode).toBe(200);
+    const firstPostPayload = postMessageOutputSchema.parse(firstPost.json());
+
+    const replay = await app.inject({
+      method: "POST",
+      url: "/v1/mcp/post_message",
+      headers: {
+        authorization: "Bearer participant_wk1"
+      },
+      payload: {
+        thread_id: "th_fixed-id",
+        schema_version: 1,
+        kind: "event",
+        body: "event payload from postgres",
+        metadata: {
+          event_type: "finding_reported",
+          event_version: 1
+        },
+        idempotency_key: "idem_event_db_01"
+      }
+    });
+    expect(replay.statusCode).toBe(200);
+    const replayPayload = postMessageOutputSchema.parse(replay.json());
+    expect(replayPayload.message_id).toBe(firstPostPayload.message_id);
+
+    const read = await app.inject({
+      method: "POST",
+      url: "/v1/mcp/read_messages",
+      headers: {
+        authorization: "Bearer coordinator_wk1"
+      },
+      payload: {
+        thread_id: "th_fixed-id",
+        since_seq: 0,
+        limit: 10
+      }
+    });
+    expect(read.statusCode).toBe(200);
+    const readPayload = readMessagesOutputSchema.parse(read.json());
+    expect(readPayload.messages).toHaveLength(1);
+    if (readPayload.messages[0]?.kind !== "event") {
+      throw new Error("Expected event message");
+    }
+    expect(readPayload.messages[0].metadata["event_version"]).toBe(1);
+  });
+
   it("persists heartbeat_session and supports latest resumable lookup", async () => {
     const heartbeat = await app.inject({
       method: "POST",

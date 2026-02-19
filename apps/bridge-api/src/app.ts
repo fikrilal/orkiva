@@ -31,6 +31,7 @@ import {
   protocolErrorResponseSchema,
   readMessagesInputSchema,
   readMessagesOutputSchema,
+  normalizeMetadataForMessageKind,
   summarizeThreadInputSchema,
   summarizeThreadOutputSchema,
   triggerParticipantOutputSchema,
@@ -343,6 +344,11 @@ const toTriggerParticipantOutput = (input: {
   });
 };
 
+const normalizeMessageMetadataForKind = (
+  kind: MessageRecord["kind"],
+  metadata: unknown
+): Record<string, unknown> | undefined => normalizeMetadataForMessageKind(kind, metadata);
+
 const isIdempotentReplayMatch = (input: {
   schemaVersion: number;
   kind: MessageRecord["kind"];
@@ -350,14 +356,17 @@ const isIdempotentReplayMatch = (input: {
   metadata?: Record<string, unknown>;
   inReplyTo?: string;
 }): ((existing: MessageRecord) => boolean) => {
-  const normalizedMetadata = input.metadata ?? undefined;
+  const normalizedMetadata = normalizeMessageMetadataForKind(input.kind, input.metadata);
   const normalizedInReplyTo = input.inReplyTo ?? undefined;
 
   return (existing) =>
     existing.schemaVersion === input.schemaVersion &&
     existing.kind === input.kind &&
     existing.body === input.body &&
-    isDeepStrictEqual(existing.metadata ?? undefined, normalizedMetadata) &&
+    isDeepStrictEqual(
+      normalizeMessageMetadataForKind(existing.kind, existing.metadata),
+      normalizedMetadata
+    ) &&
     (existing.inReplyTo ?? undefined) === normalizedInReplyTo;
 };
 
@@ -887,6 +896,7 @@ export const createBridgeApiApp = (dependencies: BridgeApiAppDependencies): Fast
     post_message: async (payload, request) => {
       const input = postMessageInputSchema.parse(payload);
       const { authClaims } = requireContext(request);
+      const canonicalMetadata = normalizeMessageMetadataForKind(input.kind, input.metadata);
 
       authorizeOperation(authClaims.role, "message:write");
       assertPayloadIdentityMatchesClaims(authClaims, {
@@ -930,7 +940,7 @@ export const createBridgeApiApp = (dependencies: BridgeApiAppDependencies): Fast
             schemaVersion: input.schema_version,
             kind: input.kind,
             body: input.body,
-            ...(input.metadata === undefined ? {} : { metadata: input.metadata }),
+            ...(canonicalMetadata === undefined ? {} : { metadata: canonicalMetadata }),
             ...(input.in_reply_to === undefined ? {} : { inReplyTo: input.in_reply_to })
           });
           if (!replayMatcher(existingMessage)) {
@@ -964,7 +974,7 @@ export const createBridgeApiApp = (dependencies: BridgeApiAppDependencies): Fast
             senderSessionId: authClaims.sessionId,
             kind: input.kind,
             body: input.body,
-            ...(input.metadata === undefined ? {} : { metadata: input.metadata }),
+            ...(canonicalMetadata === undefined ? {} : { metadata: canonicalMetadata }),
             ...(input.in_reply_to === undefined ? {} : { inReplyTo: input.in_reply_to }),
             ...(input.idempotency_key === undefined
               ? {}
@@ -985,7 +995,7 @@ export const createBridgeApiApp = (dependencies: BridgeApiAppDependencies): Fast
                 schemaVersion: input.schema_version,
                 kind: input.kind,
                 body: input.body,
-                ...(input.metadata === undefined ? {} : { metadata: input.metadata }),
+                ...(canonicalMetadata === undefined ? {} : { metadata: canonicalMetadata }),
                 ...(input.in_reply_to === undefined ? {} : { inReplyTo: input.in_reply_to })
               });
 
@@ -1042,16 +1052,19 @@ export const createBridgeApiApp = (dependencies: BridgeApiAppDependencies): Fast
       );
 
       return readMessagesOutputSchema.parse({
-        messages: page.messages.map((message) => ({
-          message_id: message.messageId,
-          schema_version: message.schemaVersion,
-          seq: message.seq,
-          kind: message.kind,
-          body: message.body,
-          ...(message.metadata === undefined ? {} : { metadata: message.metadata }),
-          sender_agent_id: message.senderAgentId,
-          created_at: toIso(message.createdAt)
-        })),
+        messages: page.messages.map((message) => {
+          const normalizedMetadata = normalizeMessageMetadataForKind(message.kind, message.metadata);
+          return {
+            message_id: message.messageId,
+            schema_version: message.schemaVersion,
+            seq: message.seq,
+            kind: message.kind,
+            body: message.body,
+            ...(normalizedMetadata === undefined ? {} : { metadata: normalizedMetadata }),
+            sender_agent_id: message.senderAgentId,
+            created_at: toIso(message.createdAt)
+          };
+        }),
         next_seq: page.nextSeq,
         has_more: page.hasMore
       });

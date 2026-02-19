@@ -27,7 +27,8 @@ Identity handling rule:
 ## 1.2 Versioning and Scope Rules
 - Endpoint major versioning starts at `/v1`.
 - Payloads include `schema_version` for compatibility control.
-- Event payloads may include `event_version` inside metadata when event schemas evolve.
+- Event payloads for `kind=event` include `metadata.event_version` for event schema evolution.
+- For backward compatibility, if `kind=event` omits `metadata.event_version`, server normalizes it to `1`.
 - Cross-workspace calls are rejected in MVP scope.
 
 ## 2. Entities
@@ -58,7 +59,8 @@ Fields:
 
 Notes:
 - `sender_agent_id` and `sender_session_id` are server-authoritative values derived from verified auth claims.
-- For `kind=event`, `metadata.event_version` is recommended when evolving event payload schema.
+- For `kind=event`, `metadata.event_version` is canonical version metadata.
+- `metadata.event_version` must be a positive integer; missing values are normalized to `1` for compatibility.
 
 ## 2.3 Participant Cursor
 Fields:
@@ -145,6 +147,7 @@ Input:
   "kind": "event",
   "body": "Blocking issue found in null fallback",
   "metadata": {
+    "event_version": 1,
     "event_type": "finding_reported",
     "severity": "high",
     "file": "lib/features/profile/data/mappers/user_mapper.dart",

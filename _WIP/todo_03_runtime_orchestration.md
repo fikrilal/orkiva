@@ -171,11 +171,11 @@ Done when:
 
 ## 8) Cross-Cutting Engineering Requirements
 
-- [ ] Maintain architecture boundaries (`tool/agent/pnpmw --no-stdin run deps:check`).
-- [ ] Keep strict typing (`any`/implicit-any disallowed).
-- [ ] Keep logs structured with correlation IDs and no secrets.
-- [ ] Avoid new dependencies unless justified and documented.
-- [ ] Update docs in same change when behavior/spec/policy changes:
+- [x] Maintain architecture boundaries (`tool/agent/pnpmw --no-stdin run deps:check`).
+- [x] Keep strict typing (`any`/implicit-any disallowed).
+- [x] Keep logs structured with correlation IDs and no secrets.
+- [x] Avoid new dependencies unless justified and documented.
+- [x] Update docs in same change when behavior/spec/policy changes:
   - protocol: `docs/proposal/04-protocol/*`
   - runtime: `docs/proposal/03-runtime/*`
   - security/governance: `docs/proposal/05-security/security_and_governance.md`

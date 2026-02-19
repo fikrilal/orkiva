@@ -20,9 +20,9 @@ Detailed workstream todos:
 
 ## Gate 0 (Before Coding)
 
-- [ ] Confirm proposal lock-ins are frozen for current sprint (`docs/proposal/07-decisions/open_questions.md`)
-- [ ] Confirm architecture, protocol, security docs are the implementation source of truth
-- [ ] Confirm Node 22 + `pnpm` + Postgres + tmux runtime baseline
+- [x] Confirm proposal lock-ins are frozen for current sprint (`docs/proposal/07-decisions/open_questions.md`)
+- [x] Confirm architecture, protocol, security docs are the implementation source of truth
+- [x] Confirm Node 22 + `pnpm` + Postgres + tmux runtime baseline
 
 ## A-Z High-Level Todo
 
