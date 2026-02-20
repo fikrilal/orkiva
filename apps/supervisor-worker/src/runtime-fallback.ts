@@ -7,7 +7,7 @@ import type {
   TriggerFallbackOutcome,
   TriggerJobRecord
 } from "./trigger-queue.js";
-import type { CommandExecutor } from "./tmux-adapter.js";
+import type { CommandExecutionInput, CommandExecutor } from "./tmux-adapter.js";
 
 export interface CodexFallbackConfig {
   resumeMaxAttempts: number;
@@ -22,6 +22,10 @@ const DEFAULT_CODEX_FALLBACK_CONFIG: CodexFallbackConfig = {
   crashLoopThreshold: 3,
   crashLoopWindowMs: 15 * 60 * 1000
 };
+
+const codexFullPermissionArgs = (): string[] => [
+  "--dangerously-bypass-approvals-and-sandbox"
+];
 
 export class CodexFallbackExecutor implements TriggerFallbackExecutor {
   private readonly recentResumeFailuresByAgent = new Map<string, Date[]>();
@@ -89,18 +93,68 @@ export class CodexFallbackExecutor implements TriggerFallbackExecutor {
     this.recentResumeFailuresByAgent.set(key, [...failures, now]);
   }
 
+  private async startCommand(input: CommandExecutionInput): Promise<
+    | { started: true; details: Record<string, unknown> }
+    | {
+        started: false;
+        details: Record<string, unknown>;
+      }
+  > {
+    if (this.commandExecutor.startDetached !== undefined) {
+      const launched = await this.commandExecutor.startDetached(input);
+      if (launched.started) {
+        return {
+          started: true,
+          details: {
+            launch_mode: "detached",
+            ...(launched.pid === undefined ? {} : { pid: launched.pid })
+          }
+        };
+      }
+
+      return {
+        started: false,
+        details: {
+          launch_mode: "detached",
+          ...(launched.errorMessage === undefined ? {} : { errorMessage: launched.errorMessage })
+        }
+      };
+    }
+
+    const completed = await this.commandExecutor.run(input);
+    if (completed.exitCode === 0) {
+      return {
+        started: true,
+        details: {
+          launch_mode: "blocking",
+          exitCode: completed.exitCode
+        }
+      };
+    }
+
+    return {
+      started: false,
+      details: {
+        launch_mode: "blocking",
+        exitCode: completed.exitCode,
+        stderr: completed.stderr.trim()
+      }
+    };
+  }
+
   private async runSpawn(job: TriggerJobRecord): Promise<TriggerFallbackOutcome> {
     const spawnPrompt = `[THREAD_SUMMARY thread=${job.threadId}] ${job.prompt}`;
-    const spawnResult = await this.commandExecutor.run({
+    const spawnResult = await this.startCommand({
       command: "codex",
-      args: ["exec", spawnPrompt]
+      args: [...codexFullPermissionArgs(), "exec", spawnPrompt]
     });
-    if (spawnResult.exitCode === 0) {
+    if (spawnResult.started) {
       return {
         attemptResult: "fallback_spawned",
         nextStatus: "fallback_spawn",
         details: {
-          command: "codex exec <thread_summary_prompt>"
+          command: "codex exec <thread_summary_prompt>",
+          ...spawnResult.details
         }
       };
     }
@@ -109,10 +163,7 @@ export class CodexFallbackExecutor implements TriggerFallbackExecutor {
       attemptResult: "fallback_resume_failed",
       nextStatus: "failed",
       errorCode: "FALLBACK_SPAWN_FAILED",
-      details: {
-        exitCode: spawnResult.exitCode,
-        stderr: spawnResult.stderr.trim()
-      }
+      details: spawnResult.details
     };
   }
 
@@ -136,17 +187,24 @@ export class CodexFallbackExecutor implements TriggerFallbackExecutor {
         resumeAttempt <= this.config.resumeMaxAttempts;
         resumeAttempt += 1
       ) {
-        const resumeResult = await this.commandExecutor.run({
+        const resumeResult = await this.startCommand({
           command: "codex",
-          args: ["exec", "resume", targetSessionId, input.job.prompt]
+          args: [
+            ...codexFullPermissionArgs(),
+            "exec",
+            "resume",
+            targetSessionId,
+            input.job.prompt
+          ]
         });
-        if (resumeResult.exitCode === 0) {
+        if (resumeResult.started) {
           return {
             attemptResult: "fallback_resume_succeeded",
             nextStatus: "fallback_resume",
             details: {
               resumeAttempt,
-              resumeMaxAttempts: this.config.resumeMaxAttempts
+              resumeMaxAttempts: this.config.resumeMaxAttempts,
+              ...resumeResult.details
             }
           };
         }

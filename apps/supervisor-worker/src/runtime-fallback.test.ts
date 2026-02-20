@@ -3,7 +3,6 @@ import { describe, expect, it, vi } from "vitest";
 import { InMemoryRuntimeRegistryStore } from "./runtime-registry.js";
 import { CodexFallbackExecutor } from "./runtime-fallback.js";
 import type { TriggerExecutionOutcome, TriggerJobRecord } from "./trigger-queue.js";
-import type { CommandExecutor } from "./tmux-adapter.js";
 
 const baseJob = (overrides: Partial<TriggerJobRecord> = {}): TriggerJobRecord => ({
   triggerId: "trg_01",
@@ -45,17 +44,19 @@ const initialOutcome: TriggerExecutionOutcome = {
 };
 
 describe("CodexFallbackExecutor", () => {
-  it("resumes session when runtime is healthy", async () => {
+  it("resumes session when runtime is healthy and start succeeds", async () => {
     const runtimeStore = new InMemoryRuntimeRegistryStore();
     await seedRuntime(runtimeStore);
-    const run = vi.fn(() =>
+    const startDetached = vi.fn(() =>
       Promise.resolve({
-        exitCode: 0,
-        stdout: "",
-        stderr: ""
+        started: true,
+        pid: 1234
       })
     );
-    const executor = new CodexFallbackExecutor(runtimeStore, { run });
+    const executor = new CodexFallbackExecutor(runtimeStore, {
+      run: vi.fn(),
+      startDetached
+    });
 
     const result = await executor.execute({
       job: baseJob(),
@@ -69,28 +70,38 @@ describe("CodexFallbackExecutor", () => {
       nextStatus: "fallback_resume",
       details: {
         resumeAttempt: 1,
-        resumeMaxAttempts: 2
+        resumeMaxAttempts: 2,
+        launch_mode: "detached",
+        pid: 1234
       }
     });
-    expect(run).toHaveBeenCalledWith({
+    expect(startDetached).toHaveBeenCalledWith({
       command: "codex",
-      args: ["exec", "resume", "sess_01", "Read unread and continue."]
+      args: [
+        "--dangerously-bypass-approvals-and-sandbox",
+        "exec",
+        "resume",
+        "sess_01",
+        "Read unread and continue."
+      ]
     });
   });
 
   it("skips resume for stale session and spawns directly", async () => {
     const runtimeStore = new InMemoryRuntimeRegistryStore();
     await seedRuntime(runtimeStore, new Date("2026-02-17T08:00:00.000Z"));
-    const run: CommandExecutor["run"] = vi.fn(() =>
+    const startDetached = vi.fn(() =>
       Promise.resolve({
-        exitCode: 0,
-        stdout: "",
-        stderr: ""
+        started: true,
+        pid: 4321
       })
     );
     const executor = new CodexFallbackExecutor(
       runtimeStore,
-      { run },
+      {
+        run: vi.fn(),
+        startDetached
+      },
       {
         resumeMaxAttempts: 2,
         staleAfterHours: 12,
@@ -108,29 +119,36 @@ describe("CodexFallbackExecutor", () => {
 
     expect(result.attemptResult).toBe("fallback_spawned");
     expect(result.nextStatus).toBe("fallback_spawn");
+    expect(result.details).toEqual({
+      resumeSkippedReason: "SESSION_STALE",
+      command: "codex exec <thread_summary_prompt>",
+      launch_mode: "detached",
+      pid: 4321
+    });
+    expect(startDetached).toHaveBeenCalledTimes(1);
   });
 
-  it("spawns after resume failures and reports failure when spawn fails", async () => {
+  it("spawns after resume start failures and reports failure when spawn start fails", async () => {
     const runtimeStore = new InMemoryRuntimeRegistryStore();
     await seedRuntime(runtimeStore);
-    const run = vi
+    const startDetached = vi
       .fn()
       .mockResolvedValueOnce({
-        exitCode: 1,
-        stdout: "",
-        stderr: "resume failed"
+        started: false,
+        errorMessage: "resume start failed"
       })
       .mockResolvedValueOnce({
-        exitCode: 1,
-        stdout: "",
-        stderr: "resume failed 2"
+        started: false,
+        errorMessage: "resume start failed 2"
       })
       .mockResolvedValueOnce({
-        exitCode: 1,
-        stdout: "",
-        stderr: "spawn failed"
+        started: false,
+        errorMessage: "spawn start failed"
       });
-    const executor = new CodexFallbackExecutor(runtimeStore, { run });
+    const executor = new CodexFallbackExecutor(runtimeStore, {
+      run: vi.fn(),
+      startDetached
+    });
 
     const result = await executor.execute({
       job: baseJob(),
@@ -145,10 +163,11 @@ describe("CodexFallbackExecutor", () => {
       errorCode: "FALLBACK_SPAWN_FAILED",
       details: {
         resumeSkippedReason: "OK",
-        exitCode: 1,
-        stderr: "spawn failed",
+        launch_mode: "detached",
+        errorMessage: "spawn start failed",
         initialErrorCode: "ACK_TIMEOUT"
       }
     });
+    expect(startDetached).toHaveBeenCalledTimes(3);
   });
 });

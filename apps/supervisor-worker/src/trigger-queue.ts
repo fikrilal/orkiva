@@ -46,7 +46,48 @@ export interface TriggerJobRecord {
   updatedAt: Date;
 }
 
-const DUE_TRIGGER_STATUSES: readonly TriggerJobStatus[] = ["queued", "timeout", "deferred"];
+export interface CreateOrReuseTriggerJobInput {
+  triggerId: string;
+  threadId: string;
+  workspaceId: string;
+  targetAgentId: string;
+  targetSessionId: string | null;
+  reason: string;
+  prompt: string;
+  status: TriggerJobStatus;
+  attempts: number;
+  maxRetries: number;
+  nextRetryAt: Date | null;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+export interface CreateOrReuseTriggerJobResult {
+  record: TriggerJobRecord;
+  created: boolean;
+}
+
+export interface ListPendingTriggerJobsInput {
+  workspaceId: string;
+  reason: string;
+  threadIds: readonly string[];
+  targetAgentIds: readonly string[];
+}
+
+export const PENDING_TRIGGER_JOB_STATUSES: readonly TriggerJobStatus[] = [
+  "queued",
+  "triggering",
+  "deferred",
+  "timeout",
+  "fallback_resume",
+  "fallback_spawn"
+];
+
+const RETRY_DUE_TRIGGER_STATUSES: readonly TriggerJobStatus[] = ["queued", "timeout", "deferred"];
+const INITIAL_FALLBACK_DUE_TRIGGER_STATUSES: readonly TriggerJobStatus[] = [
+  "fallback_resume",
+  "fallback_spawn"
+];
 
 const toTriggerJobRecord = (row: {
   triggerId: string;
@@ -79,6 +120,10 @@ const toTriggerJobRecord = (row: {
 });
 
 export interface TriggerQueueStore {
+  listPendingJobs(input: ListPendingTriggerJobsInput): Promise<readonly TriggerJobRecord[]>;
+  createOrReuseTriggerJob(
+    input: CreateOrReuseTriggerJobInput
+  ): Promise<CreateOrReuseTriggerJobResult>;
   claimDueJobs(input: {
     workspaceId: string;
     limit: number;
@@ -113,6 +158,35 @@ const toTransitionStatusForRetry = (attemptResult: TriggerAttemptResult): Trigge
 
   return "failed";
 };
+
+const isClaimEligible = (job: TriggerJobRecord, claimedAt: Date): boolean => {
+  const dueByRetryWindow =
+    job.nextRetryAt === null || job.nextRetryAt.getTime() <= claimedAt.getTime();
+  if (!dueByRetryWindow) {
+    return false;
+  }
+
+  if (RETRY_DUE_TRIGGER_STATUSES.includes(job.status)) {
+    return true;
+  }
+
+  if (INITIAL_FALLBACK_DUE_TRIGGER_STATUSES.includes(job.status)) {
+    return job.attempts === 0;
+  }
+
+  return false;
+};
+
+const toDirectFallbackRequiredOutcome = (
+  sourceStatus: "fallback_resume" | "fallback_spawn"
+): TriggerExecutionOutcome => ({
+  attemptResult: "failed",
+  retryable: false,
+  errorCode: "FALLBACK_REQUIRED",
+  details: {
+    source_status: sourceStatus
+  }
+});
 
 export interface TriggerExecutionOutcome {
   attemptResult: TriggerAttemptResult;
@@ -236,8 +310,87 @@ export class TriggerQueueProcessor {
     private readonly safeguards: TriggerQueueSafeguardsConfig = DEFAULT_TRIGGER_QUEUE_SAFEGUARDS,
     private readonly backoffBaseMs = 2000,
     private readonly backoffMaxMs = 60000,
-    private readonly logger?: TriggerQueueLogger
+    private readonly logger?: TriggerQueueLogger,
+    private readonly executionTimeoutMs = 8000
   ) {}
+
+  private timeoutOutcome(input: {
+    phase: "executor" | "fallback";
+    triggerId: string;
+    attemptNo: number;
+  }): TriggerExecutionOutcome {
+    if (input.phase === "executor") {
+      return {
+        attemptResult: "timeout",
+        retryable: true,
+        errorCode: "TRIGGER_EXECUTOR_TIMEOUT",
+        details: {
+          phase: input.phase,
+          triggerId: input.triggerId,
+          attemptNo: input.attemptNo,
+          timeoutMs: this.executionTimeoutMs
+        }
+      };
+    }
+
+    return {
+      attemptResult: "failed",
+      retryable: false,
+      errorCode: "TRIGGER_FALLBACK_TIMEOUT",
+      details: {
+        phase: input.phase,
+        triggerId: input.triggerId,
+        attemptNo: input.attemptNo,
+        timeoutMs: this.executionTimeoutMs
+      }
+    };
+  }
+
+  private exceptionOutcome(input: {
+    phase: "executor" | "fallback";
+    triggerId: string;
+    attemptNo: number;
+    error: unknown;
+  }): TriggerExecutionOutcome {
+    const errorMessage = input.error instanceof Error ? input.error.message : String(input.error);
+    const errorCode =
+      input.phase === "executor" ? "TRIGGER_EXECUTOR_EXCEPTION" : "TRIGGER_FALLBACK_EXCEPTION";
+
+    return {
+      attemptResult: "failed",
+      retryable: false,
+      errorCode,
+      details: {
+        phase: input.phase,
+        triggerId: input.triggerId,
+        attemptNo: input.attemptNo,
+        errorMessage
+      }
+    };
+  }
+
+  private async runWithTimeout<T>(input: {
+    phase: "executor" | "fallback";
+    triggerId: string;
+    attemptNo: number;
+    execute: () => Promise<T>;
+    onTimeout: () => T;
+  }): Promise<T> {
+    let timeoutHandle: NodeJS.Timeout | undefined;
+    const timeoutPromise = new Promise<T>((resolve) => {
+      timeoutHandle = setTimeout(() => {
+        resolve(input.onTimeout());
+      }, this.executionTimeoutMs);
+    });
+
+    try {
+      return await Promise.race([input.execute(), timeoutPromise]);
+    } finally {
+      if (timeoutHandle !== undefined) {
+        clearTimeout(timeoutHandle);
+      }
+    }
+  }
 
   private computeBackoffMs(attemptNo: number): number {
     const raw = this.backoffBaseMs * 2 ** Math.max(attemptNo - 1, 0);
@@ -363,14 +516,39 @@ export class TriggerQueueProcessor {
         ...correlationContext,
         attempt_no: attemptNo
       });
+      const requiresDirectFallback =
+        job.status === "fallback_resume" || job.status === "fallback_spawn";
       const rateLimitedOutcome = this.applyRateLimit(job, processedAt);
       const outcome =
-        rateLimitedOutcome ??
-        (await this.executor.execute({
-          job,
-          attemptNo,
-          now: processedAt
-        }));
+        requiresDirectFallback
+          ? toDirectFallbackRequiredOutcome(
+              job.status === "fallback_resume" ? "fallback_resume" : "fallback_spawn"
+            )
+          : rateLimitedOutcome ??
+            (await this.runWithTimeout({
+              phase: "executor",
+              triggerId: job.triggerId,
+              attemptNo,
+              execute: () =>
+                this.executor.execute({
+                  job,
+                  attemptNo,
+                  now: processedAt
+                }),
+              onTimeout: () =>
+                this.timeoutOutcome({
+                  phase: "executor",
+                  triggerId: job.triggerId,
+                  attemptNo
+                })
+            }).catch((error: unknown) =>
+              this.exceptionOutcome({
+                phase: "executor",
+                triggerId: job.triggerId,
+                attemptNo,
+                error
+              })
+            ));
 
       const shouldRetry =
         outcome.attemptResult === "deferred"
@@ -394,12 +572,40 @@ export class TriggerQueueProcessor {
             );
 
       if (!shouldRetry && outcome.attemptResult !== "delivered") {
-        const fallback = await this.fallbackExecutor.execute({
-          job,
+        const fallback = await this.runWithTimeout<TriggerFallbackOutcome>({
+          phase: "fallback",
+          triggerId: job.triggerId,
           attemptNo,
-          initialOutcome: outcome,
-          now: processedAt
-        });
+          execute: () =>
+            this.fallbackExecutor.execute({
+              job,
+              attemptNo,
+              initialOutcome: outcome,
+              now: processedAt
+            }),
+          onTimeout: () =>
+            ({
+              attemptResult: "fallback_resume_failed",
+              nextStatus: "failed",
+              errorCode: "TRIGGER_FALLBACK_TIMEOUT",
+              details: {
+                triggerId: job.triggerId,
+                attemptNo,
+                timeoutMs: this.executionTimeoutMs
+              }
+            }) satisfies TriggerFallbackOutcome
+        }).catch(
+          (error: unknown): TriggerFallbackOutcome => ({
+            attemptResult: "fallback_resume_failed",
+            nextStatus: "failed",
+            errorCode: "TRIGGER_FALLBACK_EXCEPTION",
+            details: {
+              triggerId: job.triggerId,
+              attemptNo,
+              errorMessage: error instanceof Error ? error.message : String(error)
+            }
+          })
+        );
         finalOutcome = {
           attemptResult: fallback.attemptResult,
           retryable: false,
@@ -518,6 +724,50 @@ export class InMemoryTriggerQueueStore implements TriggerQueueStore {
     }
   }
 
+  public listPendingJobs(input: ListPendingTriggerJobsInput): Promise<readonly TriggerJobRecord[]> {
+    const threadIds = new Set(input.threadIds);
+    const targetAgentIds = new Set(input.targetAgentIds);
+    return Promise.resolve(
+      [...this.jobs.values()].filter((job) => {
+        if (job.workspaceId !== input.workspaceId) {
+          return false;
+        }
+        if (job.reason !== input.reason) {
+          return false;
+        }
+        if (!PENDING_TRIGGER_JOB_STATUSES.includes(job.status)) {
+          return false;
+        }
+        if (!threadIds.has(job.threadId)) {
+          return false;
+        }
+        if (!targetAgentIds.has(job.targetAgentId)) {
+          return false;
+        }
+        return true;
+      })
+    );
+  }
+
+  public createOrReuseTriggerJob(
+    input: CreateOrReuseTriggerJobInput
+  ): Promise<CreateOrReuseTriggerJobResult> {
+    const existing = this.jobs.get(triggerKey(input.triggerId));
+    if (existing !== undefined) {
+      return Promise.resolve({
+        record: existing,
+        created: false
+      });
+    }
+
+    const created = toTriggerJobRecord(input);
+    this.jobs.set(created.triggerId, created);
+    return Promise.resolve({
+      record: created,
+      created: true
+    });
+  }
+
   public claimDueJobs(input: {
     workspaceId: string;
     limit: number;
@@ -525,10 +775,7 @@ export class InMemoryTriggerQueueStore implements TriggerQueueStore {
   }): Promise<readonly TriggerJobRecord[]> {
     const due = [...this.jobs.values()]
       .filter((job) => job.workspaceId === input.workspaceId)
-      .filter((job) => DUE_TRIGGER_STATUSES.includes(job.status))
-      .filter(
-        (job) => job.nextRetryAt === null || job.nextRetryAt.getTime() <= input.claimedAt.getTime()
-      )
+      .filter((job) => isClaimEligible(job, input.claimedAt))
       .sort((left, right) => left.createdAt.getTime() - right.createdAt.getTime())
       .slice(0, input.limit);
 
@@ -551,7 +798,10 @@ export class InMemoryTriggerQueueStore implements TriggerQueueStore {
         updatedAt: input.claimedAt
       };
       this.jobs.set(triggerKey(triggering.triggerId), triggering);
-      claimed.push(triggering);
+      claimed.push({
+        ...triggering,
+        status: candidate.status
+      });
     }
 
     return Promise.resolve(claimed);
@@ -634,6 +884,82 @@ export class InMemoryTriggerQueueStore implements TriggerQueueStore {
 export class DbTriggerQueueStore implements TriggerQueueStore {
   public constructor(private readonly db: DbClient) {}
 
+  public async listPendingJobs(
+    input: ListPendingTriggerJobsInput
+  ): Promise<readonly TriggerJobRecord[]> {
+    if (input.threadIds.length === 0 || input.targetAgentIds.length === 0) {
+      return [];
+    }
+
+    const rows = await this.db.query.triggerJobs.findMany({
+      where: (table) =>
+        and(
+          eq(table.workspaceId, input.workspaceId),
+          eq(table.reason, input.reason),
+          inArray(table.status, [...PENDING_TRIGGER_JOB_STATUSES]),
+          inArray(table.threadId, [...input.threadIds]),
+          inArray(table.targetAgentId, [...input.targetAgentIds])
+        )
+    });
+    return rows.map((row) => toTriggerJobRecord(row));
+  }
+
+  public async createOrReuseTriggerJob(
+    input: CreateOrReuseTriggerJobInput
+  ): Promise<CreateOrReuseTriggerJobResult> {
+    const inserted = await this.db
+      .insert(triggerJobs)
+      .values({
+        triggerId: input.triggerId,
+        threadId: input.threadId,
+        workspaceId: input.workspaceId,
+        targetAgentId: input.targetAgentId,
+        targetSessionId: input.targetSessionId,
+        reason: input.reason,
+        prompt: input.prompt,
+        status: input.status,
+        attempts: input.attempts,
+        maxRetries: input.maxRetries,
+        nextRetryAt: input.nextRetryAt,
+        createdAt: input.createdAt,
+        updatedAt: input.updatedAt
+      })
+      .onConflictDoNothing()
+      .returning({
+        triggerId: triggerJobs.triggerId,
+        threadId: triggerJobs.threadId,
+        workspaceId: triggerJobs.workspaceId,
+        targetAgentId: triggerJobs.targetAgentId,
+        targetSessionId: triggerJobs.targetSessionId,
+        reason: triggerJobs.reason,
+        prompt: triggerJobs.prompt,
+        status: triggerJobs.status,
+        attempts: triggerJobs.attempts,
+        maxRetries: triggerJobs.maxRetries,
+        nextRetryAt: triggerJobs.nextRetryAt,
+        createdAt: triggerJobs.createdAt,
+        updatedAt: triggerJobs.updatedAt
+      });
+    const firstInserted = inserted[0];
+    if (firstInserted !== undefined) {
+      return {
+        record: toTriggerJobRecord(firstInserted),
+        created: true
+      };
+    }
+
+    const existing = await this.db.query.triggerJobs.findFirst({
+      where: (table) => eq(table.triggerId, input.triggerId)
+    });
+    if (existing === undefined) {
+      throw new Error(`Failed to read trigger job after conflict: ${input.triggerId}`);
+    }
+    return {
+      record: toTriggerJobRecord(existing),
+      created: false
+    };
+  }
+
   public async claimDueJobs(input: {
     workspaceId: string;
     limit: number;
@@ -643,7 +969,13 @@ export class DbTriggerQueueStore implements TriggerQueueStore {
       where: (table) =>
         and(
           eq(table.workspaceId, input.workspaceId),
-          inArray(table.status, [...DUE_TRIGGER_STATUSES]),
+          or(
+            inArray(table.status, [...RETRY_DUE_TRIGGER_STATUSES]),
+            and(
+              inArray(table.status, [...INITIAL_FALLBACK_DUE_TRIGGER_STATUSES]),
+              eq(table.attempts, 0)
+            )
+          ),
           or(isNull(table.nextRetryAt), lte(table.nextRetryAt, input.claimedAt))
         ),
       orderBy: (table) => [asc(table.createdAt)],
@@ -688,7 +1020,12 @@ export class DbTriggerQueueStore implements TriggerQueueStore {
         continue;
       }
 
-      claimed.push(toTriggerJobRecord(firstUpdated));
+      claimed.push(
+        toTriggerJobRecord({
+          ...firstUpdated,
+          status: candidate.status
+        })
+      );
     }
 
     return claimed;

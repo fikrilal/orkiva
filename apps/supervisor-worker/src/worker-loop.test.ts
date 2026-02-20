@@ -26,6 +26,16 @@ describe("supervisor worker loop", () => {
         transitionedOffline: 1
       })
     );
+    const schedule = vi.fn(() =>
+      Promise.resolve({
+        workspaceId: "wk_01",
+        scheduledAt: tickAt,
+        candidates: 0,
+        enqueued: 0,
+        skippedPending: 0,
+        reusedExisting: 0
+      })
+    );
     const processDueJobs = vi.fn(() =>
       Promise.resolve({
         workspaceId: "wk_01",
@@ -44,6 +54,7 @@ describe("supervisor worker loop", () => {
 
     const loop = new SupervisorWorkerLoop(
       { reconcile: unreadReconcile },
+      { schedule },
       { reconcileWorkspaceRuntimes: runtimeReconcile },
       { processDueJobs }
     );
@@ -51,6 +62,7 @@ describe("supervisor worker loop", () => {
     const result = await loop.runTick({
       workspaceId: "wk_01",
       staleAfterHours: 12,
+      triggerMaxRetries: 2,
       maxJobsPerTick: 10,
       tickAt
     });
@@ -65,12 +77,19 @@ describe("supervisor worker loop", () => {
       staleAfterHours: 12,
       reconciledAt: tickAt
     });
+    expect(schedule).toHaveBeenCalledWith({
+      workspaceId: "wk_01",
+      candidates: [],
+      triggerMaxRetries: 2,
+      scheduledAt: tickAt
+    });
     expect(processDueJobs).toHaveBeenCalledWith({
       workspaceId: "wk_01",
       limit: 10,
       processedAt: tickAt
     });
     expect(result.unreadReconciliation.stats.participantsScanned).toBe(4);
+    expect(result.unreadTriggerScheduling.enqueued).toBe(0);
     expect(result.runtimeReconciliation.transitionedOffline).toBe(1);
     expect(result.triggerQueueProcessing.claimedJobs).toBe(2);
   });

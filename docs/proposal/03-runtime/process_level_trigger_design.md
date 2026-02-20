@@ -141,6 +141,10 @@ Responsibilities:
 5. Record fallback chain in audit log.
 6. If runtime is unmanaged, skip process trigger and execute fallback path directly.
 
+Fallback execution semantics:
+- `resume` and `spawn` are launch/start operations for autonomous flow; they must not block until task completion.
+- Success means process/session start accepted; task completion is observed asynchronously via bridge events (`heartbeat_session`, `post_message`, cursor progression).
+
 ## 10. Trigger API Contract (Supervisor Internal)
 ## 10.1 register_runtime
 Input:

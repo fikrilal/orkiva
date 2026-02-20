@@ -4,9 +4,14 @@ import type {
 } from "./unread-reconciliation.js";
 import type { ReconcileRuntimeResult, RuntimeRegistryService } from "./runtime-registry.js";
 import type { TriggerQueueProcessingResult } from "./trigger-queue.js";
+import type {
+  ScheduleUnreadCandidatesResult,
+  UnreadTriggerJobScheduler
+} from "./unread-trigger-jobs.js";
 
 export interface SupervisorWorkerLoopResult {
   unreadReconciliation: UnreadReconciliationResult;
+  unreadTriggerScheduling: ScheduleUnreadCandidatesResult;
   runtimeReconciliation: ReconcileRuntimeResult;
   triggerQueueProcessing: TriggerQueueProcessingResult;
 }
@@ -14,6 +19,7 @@ export interface SupervisorWorkerLoopResult {
 export interface SupervisorWorkerLoopInput {
   workspaceId: string;
   staleAfterHours: number;
+  triggerMaxRetries: number;
   maxJobsPerTick: number;
   tickAt?: Date;
 }
@@ -21,6 +27,7 @@ export interface SupervisorWorkerLoopInput {
 export class SupervisorWorkerLoop {
   public constructor(
     private readonly unreadReconciliationService: Pick<UnreadReconciliationService, "reconcile">,
+    private readonly unreadTriggerJobScheduler: Pick<UnreadTriggerJobScheduler, "schedule">,
     private readonly runtimeRegistryService: Pick<
       RuntimeRegistryService,
       "reconcileWorkspaceRuntimes"
@@ -41,6 +48,12 @@ export class SupervisorWorkerLoop {
       staleAfterHours: input.staleAfterHours,
       polledAt: tickAt
     });
+    const unreadTriggerScheduling = await this.unreadTriggerJobScheduler.schedule({
+      workspaceId: input.workspaceId,
+      candidates: unreadReconciliation.candidates,
+      triggerMaxRetries: input.triggerMaxRetries,
+      scheduledAt: tickAt
+    });
     const runtimeReconciliation = await this.runtimeRegistryService.reconcileWorkspaceRuntimes({
       workspaceId: input.workspaceId,
       staleAfterHours: input.staleAfterHours,
@@ -54,6 +67,7 @@ export class SupervisorWorkerLoop {
 
     return {
       unreadReconciliation,
+      unreadTriggerScheduling,
       runtimeReconciliation,
       triggerQueueProcessing
     };

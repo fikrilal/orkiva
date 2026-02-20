@@ -9,8 +9,8 @@
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run --config ../../vitest.config.ts",
-    "dev": "tsx watch src/main.ts",
-    "start": "node dist/main.js"
+    "dev": "bash -lc 'set -a; [ -f ../../.env ] && source ../../.env; set +a; tsx watch src/main.ts'",
+    "start": "bash -lc 'set -a; [ -f ../../.env ] && source ../../.env; set +a; node dist/main.js'"
   },
   "dependencies": {
     "@orkiva/db": "workspace:*",

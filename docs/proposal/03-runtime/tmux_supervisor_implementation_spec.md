@@ -196,6 +196,11 @@ tmux kill-pane -t "agents_mobile_core:reviewer.0"
 - `codex exec resume <session_id> "<trigger prompt>"`
 5. If resume fails, spawn new session with thread summary.
 
+Fallback launch semantics:
+- Supervisor treats fallback `resume`/`spawn` as non-blocking launch actions.
+- A fallback operation is successful when process start is accepted (detached launch), not when the downstream task fully completes.
+- Long-running task completion remains asynchronous and is tracked through normal bridge signals.
+
 ## 7.3 Human collision deferred path
 1. Supervisor detects operator-busy pane.
 2. Trigger state -> `deferred` and queued.

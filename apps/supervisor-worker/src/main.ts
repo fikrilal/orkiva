@@ -12,6 +12,7 @@ import {
   InMemoryUnreadReconciliationStateStore,
   UnreadReconciliationService
 } from "./unread-reconciliation.js";
+import { UnreadTriggerJobScheduler } from "./unread-trigger-jobs.js";
 import { SupervisorWorkerLoop } from "./worker-loop.js";
 
 const service = "supervisor-worker";
@@ -27,6 +28,7 @@ try {
     new InMemoryUnreadReconciliationStateStore()
   );
   const runtimeRegistryService = new RuntimeRegistryService(runtimeRegistryStore);
+  const triggerQueueStore = new DbTriggerQueueStore(db);
   const commandExecutor = new NodeCommandExecutor();
   const triggerExecutor = new ManagedRuntimeTriggerJobExecutor(
     runtimeRegistryStore,
@@ -44,7 +46,7 @@ try {
     crashLoopWindowMs: 15 * 60 * 1000
   });
   const triggerQueueProcessor = new TriggerQueueProcessor(
-    new DbTriggerQueueStore(db),
+    triggerQueueStore,
     triggerExecutor,
     fallbackExecutor,
     {
@@ -55,10 +57,12 @@ try {
     },
     2000,
     60000,
-    logger
+    logger,
+    config.TRIGGER_ACK_TIMEOUT_MS
   );
   const workerLoop = new SupervisorWorkerLoop(
     reconciliationService,
+    new UnreadTriggerJobScheduler(triggerQueueStore),
     runtimeRegistryService,
     triggerQueueProcessor
   );
@@ -67,18 +71,24 @@ try {
     const result = await workerLoop.runTick({
       workspaceId: config.WORKSPACE_ID,
       staleAfterHours: config.SESSION_STALE_AFTER_HOURS,
+      triggerMaxRetries: config.TRIGGER_MAX_RETRIES,
       maxJobsPerTick: config.WORKER_MAX_PARALLEL_JOBS
     });
     const unreadResult = result.unreadReconciliation;
+    const unreadTriggerScheduling = result.unreadTriggerScheduling;
     const runtimeResult = result.runtimeReconciliation;
     const queueResult = result.triggerQueueProcessing;
     if (
       unreadResult.candidates.length > 0 ||
+      unreadTriggerScheduling.enqueued > 0 ||
       runtimeResult.transitionedOffline > 0 ||
       queueResult.claimedJobs > 0
     ) {
       logger.info("tick.completed", {
         candidates: unreadResult.candidates.length,
+        unread_triggers_enqueued: unreadTriggerScheduling.enqueued,
+        unread_triggers_skipped_pending: unreadTriggerScheduling.skippedPending,
+        unread_triggers_reused_existing: unreadTriggerScheduling.reusedExisting,
         participants_scanned: unreadResult.stats.participantsScanned,
         deduplicated_participants: unreadResult.stats.deduplicatedParticipants,
         runtimes_checked: runtimeResult.checkedRuntimes,
@@ -94,6 +104,7 @@ try {
     } else {
       logger.info("tick.idle", {
         participants_scanned: unreadResult.stats.participantsScanned,
+        unread_triggers_enqueued: unreadTriggerScheduling.enqueued,
         runtimes_checked: runtimeResult.checkedRuntimes,
         jobs_claimed: queueResult.claimedJobs
       });

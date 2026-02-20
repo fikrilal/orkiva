@@ -17,7 +17,7 @@ const queuedJob = (input: {
   triggerId: string;
   maxRetries: number;
   attempts?: number;
-  status?: "queued" | "timeout" | "deferred";
+  status?: "queued" | "timeout" | "deferred" | "fallback_resume" | "fallback_spawn";
   nextRetryAt?: Date | null;
   threadId?: string;
   targetAgentId?: string;
@@ -147,6 +147,57 @@ describe("trigger queue processing", () => {
     const final = await store.getJobById("trg_02");
     expect(final?.status).toBe("fallback_resume");
     expect(final?.attempts).toBe(2);
+  });
+
+  it("claims fallback-required jobs and routes them directly to fallback executor", async () => {
+    const store = new InMemoryTriggerQueueStore([
+      queuedJob({
+        triggerId: "trg_fallback_queued_01",
+        maxRetries: 0,
+        status: "fallback_spawn"
+      })
+    ]);
+    const execute = vi.fn<TriggerJobExecutor["execute"]>(() =>
+      Promise.resolve({
+        attemptResult: "delivered",
+        retryable: false
+      })
+    );
+    const executor: TriggerJobExecutor = { execute };
+    const fallbackExecutor: TriggerFallbackExecutor = {
+      execute: () =>
+        Promise.resolve({
+          attemptResult: "fallback_spawned",
+          nextStatus: "fallback_spawn"
+        })
+    };
+    const processor = new TriggerQueueProcessor(store, executor, fallbackExecutor, {
+      deferRecheckMs: 5000,
+      rateLimitPerMinute: 10,
+      loopMaxTurns: 20,
+      loopMaxRepeatedFindings: 3
+    });
+
+    const result = await processor.processDueJobs({
+      workspaceId: "wk_01",
+      limit: 10,
+      processedAt: new Date("2026-02-18T10:01:00.000Z")
+    });
+
+    expect(result.claimedJobs).toBe(1);
+    expect(result.fallbackSpawned).toBe(1);
+    expect(execute).toHaveBeenCalledTimes(0);
+    const final = await store.getJobById("trg_fallback_queued_01");
+    expect(final?.status).toBe("fallback_spawn");
+    expect(final?.attempts).toBe(1);
+
+    const second = await processor.processDueJobs({
+      workspaceId: "wk_01",
+      limit: 10,
+      processedAt: new Date("2026-02-18T10:01:05.000Z")
+    });
+    expect(second.claimedJobs).toBe(0);
+    expect(second.fallbackSpawned).toBe(0);
   });
 
   it("applies per-thread+agent rate limits with deferred retries", async () => {
@@ -452,5 +503,93 @@ describe("trigger queue processing", () => {
     expect(audit?.["force_override_requested"]).toBe(true);
     expect(audit?.["force_override_applied"]).toBe(true);
     expect(details?.["reason"]).toBe("no_progress_turns:1");
+  });
+
+  it("records deterministic failure when executor throws", async () => {
+    const store = new InMemoryTriggerQueueStore([
+      queuedJob({
+        triggerId: "trg_executor_throw_01",
+        maxRetries: 0
+      })
+    ]);
+    const executor: TriggerJobExecutor = {
+      execute: () => Promise.reject(new Error("executor blew up"))
+    };
+    const processor = new TriggerQueueProcessor(
+      store,
+      executor,
+      new NoopTriggerFallbackExecutor(),
+      {
+        deferRecheckMs: 5000,
+        rateLimitPerMinute: 10,
+        loopMaxTurns: 20,
+        loopMaxRepeatedFindings: 3
+      }
+    );
+
+    const result = await processor.processDueJobs({
+      workspaceId: "wk_01",
+      limit: 10,
+      processedAt: new Date("2026-02-18T10:01:00.000Z")
+    });
+
+    expect(result.claimedJobs).toBe(1);
+    expect(result.failed).toBe(1);
+    expect(result.deadLettered).toBe(1);
+    const final = await store.getJobById("trg_executor_throw_01");
+    expect(final?.status).toBe("failed");
+    const attempts = store.getAttemptsByTrigger("trg_executor_throw_01");
+    expect(attempts).toHaveLength(1);
+    expect(attempts[0]?.errorCode).toBe("TRIGGER_EXECUTOR_EXCEPTION");
+  });
+
+  it("times out hanging fallback execution and persists attempt", async () => {
+    const store = new InMemoryTriggerQueueStore([
+      queuedJob({
+        triggerId: "trg_fallback_timeout_01",
+        maxRetries: 0
+      })
+    ]);
+    const executor: TriggerJobExecutor = {
+      execute: () =>
+        Promise.resolve({
+          attemptResult: "failed",
+          retryable: false,
+          errorCode: "RUNTIME_NOT_FOUND"
+        })
+    };
+    const hangingFallback: TriggerFallbackExecutor = {
+      execute: () => new Promise(() => undefined)
+    };
+    const processor = new TriggerQueueProcessor(
+      store,
+      executor,
+      hangingFallback,
+      {
+        deferRecheckMs: 5000,
+        rateLimitPerMinute: 10,
+        loopMaxTurns: 20,
+        loopMaxRepeatedFindings: 3
+      },
+      2000,
+      60000,
+      undefined,
+      20
+    );
+
+    const result = await processor.processDueJobs({
+      workspaceId: "wk_01",
+      limit: 10,
+      processedAt: new Date("2026-02-18T10:01:00.000Z")
+    });
+
+    expect(result.claimedJobs).toBe(1);
+    expect(result.failed).toBe(1);
+    expect(result.deadLettered).toBe(1);
+    const final = await store.getJobById("trg_fallback_timeout_01");
+    expect(final?.status).toBe("failed");
+    const attempts = store.getAttemptsByTrigger("trg_fallback_timeout_01");
+    expect(attempts).toHaveLength(1);
+    expect(attempts[0]?.errorCode).toBe("TRIGGER_FALLBACK_TIMEOUT");
   });
 });

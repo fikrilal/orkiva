@@ -19,8 +19,15 @@ export interface CommandExecutionResult {
   stderr: string;
 }
 
+export interface CommandStartResult {
+  started: boolean;
+  pid?: number;
+  errorMessage?: string;
+}
+
 export interface CommandExecutor {
   run(input: CommandExecutionInput): Promise<CommandExecutionResult>;
+  startDetached?(input: CommandExecutionInput): Promise<CommandStartResult>;
 }
 
 export class NodeCommandExecutor implements CommandExecutor {
@@ -43,6 +50,39 @@ export class NodeCommandExecutor implements CommandExecutor {
           exitCode: code ?? 1,
           stdout,
           stderr
+        });
+      });
+    });
+  }
+
+  public startDetached(input: CommandExecutionInput): Promise<CommandStartResult> {
+    return new Promise<CommandStartResult>((resolve) => {
+      const child = spawn(input.command, [...input.args], {
+        stdio: ["ignore", "ignore", "ignore"],
+        detached: true
+      });
+      let resolved = false;
+
+      child.once("error", (error: Error) => {
+        if (resolved) {
+          return;
+        }
+        resolved = true;
+        resolve({
+          started: false,
+          errorMessage: error.message
+        });
+      });
+
+      child.once("spawn", () => {
+        if (resolved) {
+          return;
+        }
+        resolved = true;
+        child.unref();
+        resolve({
+          started: true,
+          ...(child.pid === undefined ? {} : { pid: child.pid })
         });
       });
     });
