@@ -58,7 +58,11 @@ const runtimeConfigSchema = z.object({
   TRIGGER_RATE_LIMIT_PER_MINUTE: positiveIntWithDefault(10),
   LOOP_MAX_TURNS: positiveIntWithDefault(20),
   LOOP_MAX_REPEATED_FINDINGS: positiveIntWithDefault(3),
-  SESSION_STALE_AFTER_HOURS: positiveIntWithDefault(12)
+  SESSION_STALE_AFTER_HOURS: positiveIntWithDefault(12),
+  WORKER_BRIDGE_API_BASE_URL: stringWithDefault("http://127.0.0.1:3000"),
+  WORKER_BRIDGE_ACCESS_TOKEN: z.string().min(1).optional(),
+  WORKER_CALLBACK_MAX_RETRIES: positiveIntWithDefault(3),
+  WORKER_CALLBACK_REQUEST_TIMEOUT_MS: positiveIntWithDefault(8000)
 });
 
 const bridgeApiConfigSchema = runtimeConfigSchema.extend({

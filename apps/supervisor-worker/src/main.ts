@@ -3,6 +3,7 @@ import { createJsonLogger } from "@orkiva/observability";
 import { formatConfigValidationError, loadSupervisorWorkerConfig } from "@orkiva/shared";
 
 import { DbRuntimeRegistryStore, RuntimeRegistryService } from "./runtime-registry.js";
+import { BridgeTriggerCallbackExecutor } from "./trigger-callback.js";
 import { CodexFallbackExecutor } from "./runtime-fallback.js";
 import { ManagedRuntimeTriggerJobExecutor } from "./runtime-trigger-executor.js";
 import { NodeCommandExecutor, TmuxTriggerPtyAdapter } from "./tmux-adapter.js";
@@ -45,6 +46,13 @@ try {
     crashLoopThreshold: config.LOOP_MAX_REPEATED_FINDINGS,
     crashLoopWindowMs: 15 * 60 * 1000
   });
+  const callbackExecutor = new BridgeTriggerCallbackExecutor({
+    bridgeApiBaseUrl: config.WORKER_BRIDGE_API_BASE_URL,
+    ...(config.WORKER_BRIDGE_ACCESS_TOKEN === undefined
+      ? {}
+      : { accessToken: config.WORKER_BRIDGE_ACCESS_TOKEN }),
+    requestTimeoutMs: config.WORKER_CALLBACK_REQUEST_TIMEOUT_MS
+  });
   const triggerQueueProcessor = new TriggerQueueProcessor(
     triggerQueueStore,
     triggerExecutor,
@@ -58,7 +66,9 @@ try {
     2000,
     60000,
     logger,
-    config.TRIGGER_ACK_TIMEOUT_MS
+    config.TRIGGER_ACK_TIMEOUT_MS,
+    config.WORKER_CALLBACK_MAX_RETRIES,
+    callbackExecutor
   );
   const workerLoop = new SupervisorWorkerLoop(
     reconciliationService,
@@ -98,6 +108,9 @@ try {
         retried: queueResult.retried,
         fallback_resumed: queueResult.fallbackResumed,
         fallback_spawned: queueResult.fallbackSpawned,
+        callback_delivered: queueResult.callbackDelivered,
+        callback_retried: queueResult.callbackRetried,
+        callback_failed: queueResult.callbackFailed,
         auto_blocked: queueResult.autoBlocked,
         dead_lettered: queueResult.deadLettered
       });

@@ -17,7 +17,14 @@ const queuedJob = (input: {
   triggerId: string;
   maxRetries: number;
   attempts?: number;
-  status?: "queued" | "timeout" | "deferred" | "fallback_resume" | "fallback_spawn";
+  status?:
+    | "queued"
+    | "timeout"
+    | "deferred"
+    | "fallback_resume"
+    | "fallback_spawn"
+    | "callback_pending"
+    | "callback_retry";
   nextRetryAt?: Date | null;
   threadId?: string;
   targetAgentId?: string;
@@ -97,7 +104,7 @@ describe("trigger queue processing", () => {
     expect(secondTick.claimedJobs).toBe(1);
     expect(secondTick.delivered).toBe(1);
     const afterSecond = await store.getJobById("trg_01");
-    expect(afterSecond?.status).toBe("delivered");
+    expect(afterSecond?.status).toBe("callback_pending");
     expect(afterSecond?.attempts).toBe(2);
     expect(afterSecond?.nextRetryAt).toBeNull();
   });
@@ -145,7 +152,7 @@ describe("trigger queue processing", () => {
     expect(second.failed).toBe(0);
     expect(second.fallbackResumed).toBe(1);
     const final = await store.getJobById("trg_02");
-    expect(final?.status).toBe("fallback_resume");
+    expect(final?.status).toBe("callback_pending");
     expect(final?.attempts).toBe(2);
   });
 
@@ -188,7 +195,7 @@ describe("trigger queue processing", () => {
     expect(result.fallbackSpawned).toBe(1);
     expect(execute).toHaveBeenCalledTimes(0);
     const final = await store.getJobById("trg_fallback_queued_01");
-    expect(final?.status).toBe("fallback_spawn");
+    expect(final?.status).toBe("callback_pending");
     expect(final?.attempts).toBe(1);
 
     const second = await processor.processDueJobs({
@@ -196,8 +203,9 @@ describe("trigger queue processing", () => {
       limit: 10,
       processedAt: new Date("2026-02-18T10:01:05.000Z")
     });
-    expect(second.claimedJobs).toBe(0);
+    expect(second.claimedJobs).toBe(1);
     expect(second.fallbackSpawned).toBe(0);
+    expect(second.callbackFailed).toBe(1);
   });
 
   it("applies per-thread+agent rate limits with deferred retries", async () => {
@@ -338,7 +346,7 @@ describe("trigger queue processing", () => {
     expect(left.claimedJobs + right.claimedJobs).toBe(1);
     expect(execute).toHaveBeenCalledTimes(1);
     const final = await store.getJobById("trg_08");
-    expect(final?.status).toBe("delivered");
+    expect(final?.status).toBe("callback_pending");
     expect(final?.attempts).toBe(1);
   });
 
@@ -503,6 +511,58 @@ describe("trigger queue processing", () => {
     expect(audit?.["force_override_requested"]).toBe(true);
     expect(audit?.["force_override_applied"]).toBe(true);
     expect(details?.["reason"]).toBe("no_progress_turns:1");
+  });
+
+  it("delivers callback events from callback_pending jobs", async () => {
+    const job = queuedJob({
+      triggerId: "trg_callback_pending_01",
+      maxRetries: 0,
+      status: "callback_pending",
+      attempts: 2
+    });
+    const store = new InMemoryTriggerQueueStore([job]);
+
+    const executor: TriggerJobExecutor = {
+      execute: () =>
+        Promise.resolve({
+          attemptResult: "delivered",
+          retryable: false
+        })
+    };
+    const callbackExecutor = {
+      execute: () =>
+        Promise.resolve({
+          attemptResult: "callback_post_succeeded",
+          retryable: false
+        } as const)
+    };
+    const processor = new TriggerQueueProcessor(
+      store,
+      executor,
+      new NoopTriggerFallbackExecutor(),
+      {
+        deferRecheckMs: 5000,
+        rateLimitPerMinute: 10,
+        loopMaxTurns: 20,
+        loopMaxRepeatedFindings: 3
+      },
+      2000,
+      60000,
+      undefined,
+      8000,
+      3,
+      callbackExecutor
+    );
+
+    const result = await processor.processDueJobs({
+      workspaceId: "wk_01",
+      limit: 10,
+      processedAt: new Date("2026-02-18T10:01:00.000Z")
+    });
+
+    expect(result.callbackDelivered).toBe(1);
+    const final = await store.getJobById(job.triggerId);
+    expect(final?.status).toBe("callback_delivered");
   });
 
   it("records deterministic failure when executor throws", async () => {

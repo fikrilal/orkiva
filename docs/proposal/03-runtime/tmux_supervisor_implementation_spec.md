@@ -200,6 +200,7 @@ Fallback launch semantics:
 - Supervisor treats fallback `resume`/`spawn` as non-blocking launch actions.
 - A fallback operation is successful when process start is accepted (detached launch), not when the downstream task fully completes.
 - Long-running task completion remains asynchronous and is tracked through normal bridge signals.
+- Supervisor must enqueue a worker-owned completion callback after trigger/fallback execution and deliver it through bridge `post_message` (`event_type=trigger.completed`) with persisted retries and idempotent replay.
 
 ## 7.3 Human collision deferred path
 1. Supervisor detects operator-busy pane.

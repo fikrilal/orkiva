@@ -47,6 +47,9 @@ describe("supervisor worker loop", () => {
         failed: 0,
         fallbackResumed: 0,
         fallbackSpawned: 0,
+        callbackDelivered: 0,
+        callbackRetried: 0,
+        callbackFailed: 0,
         autoBlocked: 0,
         deadLetterJobIds: []
       })

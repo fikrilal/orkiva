@@ -26,7 +26,11 @@ export const triggerJobStatusSchema = z.enum([
   "timeout",
   "failed",
   "fallback_resume",
-  "fallback_spawn"
+  "fallback_spawn",
+  "callback_pending",
+  "callback_retry",
+  "callback_delivered",
+  "callback_failed"
 ]);
 
 export const triggerParticipantActionSchema = z.enum(["trigger_runtime", "fallback_required"]);

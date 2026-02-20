@@ -239,3 +239,45 @@
 
 ### Remaining gap
 - Even with full sandbox, callback posting is still not deterministic/guaranteed in current flow because completion remains prompt-driven rather than contract-enforced (see Issue 08).
+
+## Issue 10: Runtime failed to recognize new worker callback env keys until package builds were refreshed
+### Evidence
+- E2E worker logs initially recorded callback failures with:
+  - `attempt_result=callback_post_failed`
+  - `error_code=CALLBACK_AUTH_TOKEN_MISSING`
+- A direct runtime probe showed `loadSupervisorWorkerConfig(...).WORKER_BRIDGE_ACCESS_TOKEN` was `missing` despite export.
+
+### Root cause
+- Runtime resolves `@orkiva/shared` from built package output (`dist`).
+- New env keys were added in source but not yet built into `dist`.
+
+### Tweak applied
+- Rebuilt changed workspace packages before E2E:
+  - `pnpm --filter @orkiva/shared build`
+  - `pnpm --filter @orkiva/protocol build`
+  - `pnpm --filter @orkiva/db build`
+  - `pnpm --filter @orkiva/supervisor-worker build`
+
+## Issue 11: Worker-owned callback events created unread-trigger feedback loops
+### Evidence
+- First callback-enabled E2E in `wk_callback_test` produced many `trigger.completed` events in one thread.
+- Worker logs showed repeated auto-unread triggers for both participants after each callback event.
+
+### Root cause
+- Unread reconciliation used latest thread message sequence without excluding worker-owned callback events.
+- Callback messages were treated as actionable unread messages.
+
+### Tweak applied
+1. Marked worker callback events with metadata flag:
+   - `suppress_auto_trigger: true`
+   - file: `apps/supervisor-worker/src/trigger-callback.ts`
+2. Updated unread reconciliation latest-seq query to ignore suppressed events:
+   - `coalesce((metadata->>'suppress_auto_trigger')::boolean, false) = false`
+   - file: `apps/supervisor-worker/src/unread-reconciliation.ts`
+3. Added assertion coverage for suppression metadata in callback tests:
+   - file: `apps/supervisor-worker/src/trigger-callback.test.ts`
+
+### Validation
+- Isolated E2E workspace run (`wk_callback_once_1771622461`) produced exactly one callback:
+  - `CALLBACK_EVENT_COUNT=1`
+  - worker logs show `callback_post_succeeded` and terminal `next_status=callback_delivered`.

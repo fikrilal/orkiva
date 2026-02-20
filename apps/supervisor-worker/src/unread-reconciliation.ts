@@ -5,7 +5,7 @@ import {
   type SessionStatus,
   type ThreadStatus
 } from "@orkiva/domain";
-import { and, eq, inArray, ne } from "drizzle-orm";
+import { and, eq, inArray, ne, sql } from "drizzle-orm";
 
 interface SessionSnapshot {
   sessionId: string;
@@ -301,7 +301,11 @@ export class DbUnreadReconciliationSnapshotStore implements UnreadReconciliation
     const latestSeqEntries = await Promise.all(
       threadIds.map(async (threadId) => {
         const latest = await this.db.query.messages.findFirst({
-          where: (table) => eq(table.threadId, threadId),
+          where: (table) =>
+            and(
+              eq(table.threadId, threadId),
+              sql`coalesce((${table.metadata} ->> 'suppress_auto_trigger')::boolean, false) = false`
+            ),
           orderBy: (table, operators) => [operators.desc(table.seq)],
           columns: {
             seq: true

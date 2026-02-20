@@ -64,6 +64,8 @@ Notes:
 - `sender_agent_id` and `sender_session_id` are server-authoritative values derived from verified auth claims.
 - For `kind=event`, `metadata.event_version` is canonical version metadata.
 - `metadata.event_version` must be a positive integer; missing values are normalized to `1` for compatibility.
+- Worker-owned trigger completion callbacks use `kind=event` with `metadata.event_type=trigger.completed`.
+- `trigger.completed` metadata baseline includes: `trigger_id`, `job_id`, `target_agent_id`, `trigger_outcome`, `started_at`, `finished_at`, callback attempt fields, and `suppress_auto_trigger=true`.
 
 ## 2.3 Participant Cursor
 Fields:
@@ -368,6 +370,7 @@ Codex CLI runtime notes:
 - Preferred path: trigger live managed runtime via supervisor PTY delivery.
 - First fallback: `codex exec resume <session_id> <prompt>`.
 - Final fallback: if resume target is unavailable, launch a new session and include `summarize_thread` output in initial prompt.
+- Trigger completion callback delivery is worker-owned with persisted retries and idempotent `post_message` replay.
 
 ## 4. Event Type Registry (Initial)
 - `finding_reported`
@@ -377,6 +380,7 @@ Codex CLI runtime notes:
 - `finding_rejected`
 - `thread_escalated`
 - `thread_resolved`
+- `trigger.completed`
 
 ## 5. Message Lifecycle
 1. Created

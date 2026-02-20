@@ -144,6 +144,8 @@ Responsibilities:
 Fallback execution semantics:
 - `resume` and `spawn` are launch/start operations for autonomous flow; they must not block until task completion.
 - Success means process/session start accepted; task completion is observed asynchronously via bridge events (`heartbeat_session`, `post_message`, cursor progression).
+- Worker-owned completion callback is mandatory: after trigger/fallback execution completes, supervisor posts `event_type=trigger.completed` with persisted retries and idempotency keying.
+- Callback delivery state machine: `callback_pending -> callback_retry -> callback_delivered | callback_failed`.
 
 ## 10. Trigger API Contract (Supervisor Internal)
 ## 10.1 register_runtime

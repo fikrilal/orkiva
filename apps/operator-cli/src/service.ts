@@ -39,7 +39,11 @@ export interface TriggerJobSummaryRecord {
     | "timeout"
     | "failed"
     | "fallback_resume"
-    | "fallback_spawn";
+    | "fallback_spawn"
+    | "callback_pending"
+    | "callback_retry"
+    | "callback_delivered"
+    | "callback_failed";
   attempts: number;
   maxRetries: number;
   createdAt: Date;

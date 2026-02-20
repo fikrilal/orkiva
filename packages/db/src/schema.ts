@@ -32,7 +32,11 @@ export const triggerJobStatusEnum = pgEnum("trigger_job_status", [
   "timeout",
   "failed",
   "fallback_resume",
-  "fallback_spawn"
+  "fallback_spawn",
+  "callback_pending",
+  "callback_retry",
+  "callback_delivered",
+  "callback_failed"
 ]);
 export const triggerAttemptResultEnum = pgEnum("trigger_attempt_result", [
   "delivered",
@@ -42,7 +46,10 @@ export const triggerAttemptResultEnum = pgEnum("trigger_attempt_result", [
   "fallback_resume_started",
   "fallback_resume_succeeded",
   "fallback_resume_failed",
-  "fallback_spawned"
+  "fallback_spawned",
+  "callback_post_succeeded",
+  "callback_post_deferred",
+  "callback_post_failed"
 ]);
 
 export const threads = pgTable(
