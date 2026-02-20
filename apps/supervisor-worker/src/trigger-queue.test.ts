@@ -291,6 +291,64 @@ describe("trigger queue processing", () => {
     expect(final?.attempts).toBe(1);
   });
 
+  it("propagates request correlation ids into attempt details and worker logs", async () => {
+    const store = new InMemoryTriggerQueueStore([
+      queuedJob({
+        triggerId: "trg_req_corr_01",
+        maxRetries: 0
+      })
+    ]);
+    const executor: TriggerJobExecutor = {
+      execute: () =>
+        Promise.resolve({
+          attemptResult: "delivered",
+          retryable: false
+        })
+    };
+    const info = vi.fn();
+    const processor = new TriggerQueueProcessor(
+      store,
+      executor,
+      new NoopTriggerFallbackExecutor(),
+      {
+        deferRecheckMs: 5000,
+        rateLimitPerMinute: 10,
+        loopMaxTurns: 20,
+        loopMaxRepeatedFindings: 3
+      },
+      2000,
+      60000,
+      { info }
+    );
+
+    const result = await processor.processDueJobs({
+      workspaceId: "wk_01",
+      limit: 10,
+      processedAt: new Date("2026-02-18T10:01:00.000Z")
+    });
+
+    expect(result.delivered).toBe(1);
+    const attempts = store.getAttemptsByTrigger("trg_req_corr_01");
+    expect(attempts).toHaveLength(1);
+    expect(attempts[0]?.details?.["request_id"]).toBe("req_corr_01");
+    expect(attempts[0]?.details?.["trigger_id"]).toBe("trg_req_corr_01");
+    expect(info).toHaveBeenCalledWith(
+      "trigger.job.claimed",
+      expect.objectContaining({
+        request_id: "req_corr_01",
+        trigger_id: "trg_req_corr_01"
+      })
+    );
+    expect(info).toHaveBeenCalledWith(
+      "trigger.attempt.recorded",
+      expect.objectContaining({
+        request_id: "req_corr_01",
+        trigger_id: "trg_req_corr_01",
+        attempt_result: "delivered"
+      })
+    );
+  });
+
   it("persists explicit force-override audit details in trigger attempts", async () => {
     const store = new InMemoryTriggerQueueStore([
       queuedJob({

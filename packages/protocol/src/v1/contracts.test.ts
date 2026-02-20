@@ -1,10 +1,12 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  buildTriggerId,
   CURRENT_EVENT_VERSION,
   CURRENT_MESSAGE_SCHEMA_VERSION,
   ackReadInputSchema,
   createThreadInputSchema,
+  extractRequestIdFromTriggerId,
   heartbeatSessionInputSchema,
   postMessageInputSchema,
   protocolErrorResponseSchema,
@@ -192,5 +194,14 @@ describe("protocol v1 contracts", () => {
       request_id: "req_01"
     });
     expect(parsed.error.code).toBe("UNAUTHORIZED");
+  });
+
+  it("builds and parses trigger/request correlation ids", () => {
+    const requestId = "req_1234";
+    const triggerId = buildTriggerId(requestId);
+    expect(triggerId).toBe("trg_req_1234");
+    expect(extractRequestIdFromTriggerId(triggerId)).toBe(requestId);
+    expect(extractRequestIdFromTriggerId("req_1234")).toBeNull();
+    expect(extractRequestIdFromTriggerId("trg_")).toBeNull();
   });
 });

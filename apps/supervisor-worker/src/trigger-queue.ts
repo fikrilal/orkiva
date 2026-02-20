@@ -1,5 +1,6 @@
 import type { DbClient } from "@orkiva/db";
 import { threads, triggerAttempts, triggerJobs } from "@orkiva/db";
+import { extractRequestIdFromTriggerId } from "@orkiva/protocol";
 import { and, asc, eq, inArray, isNull, lte, or } from "drizzle-orm";
 
 export type TriggerJobStatus =
@@ -204,6 +205,12 @@ export interface TriggerQueueSafeguardsConfig {
   loopMaxRepeatedFindings: number;
 }
 
+type TriggerQueueLogContext = Record<string, string | number | boolean | null | undefined>;
+
+interface TriggerQueueLogger {
+  info(message: string, context?: TriggerQueueLogContext): void;
+}
+
 const DEFAULT_TRIGGER_QUEUE_SAFEGUARDS: TriggerQueueSafeguardsConfig = {
   deferRecheckMs: 5_000,
   rateLimitPerMinute: 10,
@@ -228,7 +235,8 @@ export class TriggerQueueProcessor {
     private readonly fallbackExecutor: TriggerFallbackExecutor = new NoopTriggerFallbackExecutor(),
     private readonly safeguards: TriggerQueueSafeguardsConfig = DEFAULT_TRIGGER_QUEUE_SAFEGUARDS,
     private readonly backoffBaseMs = 2000,
-    private readonly backoffMaxMs = 60000
+    private readonly backoffMaxMs = 60000,
+    private readonly logger?: TriggerQueueLogger
   ) {}
 
   private computeBackoffMs(attemptNo: number): number {
@@ -343,6 +351,18 @@ export class TriggerQueueProcessor {
 
     for (const job of claimedJobs) {
       const attemptNo = job.attempts + 1;
+      const requestId = extractRequestIdFromTriggerId(job.triggerId);
+      const correlationContext: TriggerQueueLogContext = {
+        trigger_id: job.triggerId,
+        ...(requestId === null ? {} : { request_id: requestId }),
+        thread_id: job.threadId,
+        workspace_id: job.workspaceId,
+        target_agent_id: job.targetAgentId
+      };
+      this.logger?.info("trigger.job.claimed", {
+        ...correlationContext,
+        attempt_no: attemptNo
+      });
       const rateLimitedOutcome = this.applyRateLimit(job, processedAt);
       const outcome =
         rateLimitedOutcome ??
@@ -418,15 +438,28 @@ export class TriggerQueueProcessor {
         nextRetryAt = null;
       }
 
+      const correlatedDetails: Record<string, unknown> = {
+        ...(finalOutcome.details === undefined ? {} : finalOutcome.details),
+        trigger_id: job.triggerId,
+        ...(requestId === null ? {} : { request_id: requestId })
+      };
+
       await this.store.recordAttemptAndTransition({
         triggerId: job.triggerId,
         attemptNo,
         attemptResult: finalOutcome.attemptResult,
         ...(finalOutcome.errorCode === undefined ? {} : { errorCode: finalOutcome.errorCode }),
-        ...(finalOutcome.details === undefined ? {} : { details: finalOutcome.details }),
+        details: correlatedDetails,
         nextStatus,
         nextRetryAt,
         transitionedAt: processedAt
+      });
+      this.logger?.info("trigger.attempt.recorded", {
+        ...correlationContext,
+        attempt_no: attemptNo,
+        attempt_result: finalOutcome.attemptResult,
+        next_status: nextStatus,
+        ...(finalOutcome.errorCode === undefined ? {} : { error_code: finalOutcome.errorCode })
       });
 
       if (

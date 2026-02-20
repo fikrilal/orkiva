@@ -20,6 +20,7 @@ import {
 import {
   ackReadInputSchema,
   ackReadOutputSchema,
+  buildTriggerId,
   createThreadInputSchema,
   createThreadOutputSchema,
   getThreadInputSchema,
@@ -818,7 +819,7 @@ export const createBridgeApiApp = (dependencies: BridgeApiAppDependencies): Fast
         referenceTime: requestTime
       });
 
-      const triggerId = `trg_${request.id}`;
+      const triggerId = buildTriggerId(request.id);
       const createResult = await dependencies.triggerStore.createOrReuseTriggerJob({
         triggerId,
         threadId: input.thread_id,
@@ -865,6 +866,15 @@ export const createBridgeApiApp = (dependencies: BridgeApiAppDependencies): Fast
         ...(currentSession === null ? {} : { runtime: currentSession.runtime }),
         ...(currentSession === null ? {} : { managementMode: currentSession.managementMode }),
         ...(currentSession === null ? {} : { sessionStatus: currentSession.status })
+      });
+      logger.info("trigger.enqueued", {
+        request_id: request.id,
+        trigger_id: responsePayload.trigger_id,
+        thread_id: existingThread.threadId,
+        workspace_id: existingThread.workspaceId,
+        target_agent_id: responsePayload.target_agent_id,
+        action: responsePayload.action,
+        job_status: responsePayload.job_status
       });
 
       await writeAuditEvent({

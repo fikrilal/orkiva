@@ -269,7 +269,7 @@ Metrics:
 - `trigger_latency_ms`
 
 Logs:
-- `trigger_id`, `thread_id`, `agent_id`, `runtime_id`, `result`, `fallback_used`
+- `request_id`, `trigger_id`, `thread_id`, `agent_id`, `runtime_id`, `result`, `fallback_used`
 
 Alerts:
 - timeout ratio threshold exceeded

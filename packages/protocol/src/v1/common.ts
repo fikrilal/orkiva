@@ -3,6 +3,7 @@ import { z } from "zod";
 export const API_MAJOR_VERSION = "v1" as const;
 export const CURRENT_MESSAGE_SCHEMA_VERSION = 1 as const;
 export const CURRENT_EVENT_VERSION = 1 as const;
+export const TRIGGER_ID_PREFIX = "trg_" as const;
 
 export const nonEmptyStringSchema = z.string().trim().min(1);
 export const isoDatetimeSchema = z.string().datetime({ offset: true });
@@ -69,4 +70,15 @@ export const normalizeMetadataForMessageKind = (
   }
 
   return { ...(metadata as Record<string, unknown>) };
+};
+
+export const buildTriggerId = (requestId: string): string => `${TRIGGER_ID_PREFIX}${requestId}`;
+
+export const extractRequestIdFromTriggerId = (triggerId: string): string | null => {
+  if (!triggerId.startsWith(TRIGGER_ID_PREFIX)) {
+    return null;
+  }
+
+  const requestId = triggerId.slice(TRIGGER_ID_PREFIX.length);
+  return requestId.length === 0 ? null : requestId;
 };

@@ -52,7 +52,10 @@ try {
       rateLimitPerMinute: config.TRIGGER_RATE_LIMIT_PER_MINUTE,
       loopMaxTurns: config.LOOP_MAX_TURNS,
       loopMaxRepeatedFindings: config.LOOP_MAX_REPEATED_FINDINGS
-    }
+    },
+    2000,
+    60000,
+    logger
   );
   const workerLoop = new SupervisorWorkerLoop(
     reconciliationService,

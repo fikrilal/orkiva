@@ -288,7 +288,7 @@ Algorithm:
 - Trigger payload is text-only and length-limited.
 - Control characters sanitized before `send-keys`.
 - Restrict supervisor to allowlisted workspace directories.
-- Audit every trigger with `trigger_id`, `agent_id`, `thread_id`, `result`.
+- Audit every trigger with `request_id`, `trigger_id`, `agent_id`, `thread_id`, `result`.
 - Force-override attempts must persist structured audit details in trigger attempts:
   - `force_override_requested`
   - `force_override_applied`
@@ -315,6 +315,10 @@ Structured events:
 - `fallback_resume_started`
 - `fallback_resume_succeeded`
 - `runtime_restart_failed`
+
+Event correlation fields:
+- `request_id` (derived from trigger id when available)
+- `trigger_id`
 
 ## 14. Example End-to-End Command Sequence
 Example for first-time reviewer bootstrap and trigger:

@@ -92,6 +92,9 @@ importers:
       '@orkiva/observability':
         specifier: workspace:*
         version: link:../../packages/observability
+      '@orkiva/protocol':
+        specifier: workspace:*
+        version: link:../../packages/protocol
       '@orkiva/shared':
         specifier: workspace:*
         version: link:../../packages/shared

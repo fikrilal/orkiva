@@ -4,6 +4,7 @@ import { AuthError, type VerifiedAuthClaims } from "@orkiva/auth";
 import { createDb, createDbPool } from "@orkiva/db";
 import {
   ackReadOutputSchema,
+  buildTriggerId,
   createThreadOutputSchema,
   heartbeatSessionOutputSchema,
   postMessageOutputSchema,
@@ -622,6 +623,7 @@ describeDb("bridge-api db integration", () => {
     });
     expect(first.statusCode).toBe(200);
     const firstPayload = triggerParticipantOutputSchema.parse(first.json());
+    expect(firstPayload.trigger_id).toBe(buildTriggerId("req_db_trigger_01"));
     expect(firstPayload.action).toBe("trigger_runtime");
     expect(firstPayload.job_status).toBe("queued");
 

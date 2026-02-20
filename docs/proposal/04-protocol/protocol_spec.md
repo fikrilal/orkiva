@@ -359,6 +359,8 @@ Bridge enqueue decision contract (current implementation baseline):
 
 Deterministic idempotency baseline:
 - `trigger_id` is deterministic per request ID.
+- canonical trigger format is `trg_<request_id>`.
+- implementations should build/parse trigger correlation via shared helpers (`buildTriggerId`, `extractRequestIdFromTriggerId`) to avoid drift.
 - Retries with same request ID and same payload return the existing trigger job.
 - Retries with same request ID and different payload return `IDEMPOTENCY_CONFLICT`.
 

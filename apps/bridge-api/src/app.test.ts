@@ -4,6 +4,7 @@ import { AuthError, type VerifiedAuthClaims } from "@orkiva/auth";
 import type { ThreadStatus } from "@orkiva/domain";
 import {
   ackReadOutputSchema,
+  buildTriggerId,
   createThreadOutputSchema,
   getThreadOutputSchema,
   heartbeatSessionOutputSchema,
@@ -824,6 +825,7 @@ describe("bridge-api phase 4-8", () => {
     });
     expect(first.statusCode).toBe(200);
     const firstPayload = triggerParticipantOutputSchema.parse(first.json());
+    expect(firstPayload.trigger_id).toBe(buildTriggerId("req_trigger_idempotent_01"));
 
     const retry = await app.inject({
       method: "POST",
