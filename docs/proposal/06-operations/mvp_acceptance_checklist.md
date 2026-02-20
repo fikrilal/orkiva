@@ -28,7 +28,7 @@ Use this checklist as the implementation validation baseline.
 | F-06 | Read flow supports cursor-based retrieval and ack updates per participant | PRD FR-4/FR-6, Protocol `read_messages`/`ack_read`, Backlog 1.3/2.2 | Integration tests for cursor progression + unread behavior | [ ] | [ ] | |
 | F-07 | Thread summarization returns compressed context and open items | PRD FR-7, Protocol `summarize_thread`, Backlog 2.3 | Unit/integration tests for summary output shape | [ ] | [ ] | |
 | F-08 | Escalation markers and owner-assigned escalation flow are supported | PRD FR-9, Backlog 5.2 | Scenario test showing escalation + unblock path | [ ] | [ ] | |
-| F-09 | Pilot executioner-reviewer flow completes end-to-end without manual relay | PRD Goals/Launch Criteria, Backlog 5.1 | Recorded E2E run + assertions on automated handoff | [ ] | [ ] | |
+| F-09 | Pilot executioner-reviewer flow completes end-to-end without manual relay | PRD Goals/Launch Criteria, Backlog 5.1 | Recorded E2E run + assertions on automated handoff | [x] | [ ] | `apps/bridge-api/src/workflow.integration.test.ts` |
 
 ## B) Data, Ordering, Idempotency, and Versioning
 
@@ -73,9 +73,9 @@ Use this checklist as the implementation validation baseline.
 | O-01 | No message loss after server acknowledgement under transient failure scenarios | PRD NFR-1, Backlog 4.3 | Fault-injection + replay tests | [ ] | [ ] | |
 | O-02 | Throughput/latency metrics and health endpoints are exposed | PRD NFR-5, Backlog 4.1/4.2 | Metrics scrape + health/readiness checks | [ ] | [ ] | |
 | O-03 | Correlation IDs are present across API/worker logs and trace paths | PRD NFR-5, Backlog 4.1 | Structured log assertions | [ ] | [ ] | |
-| O-04 | Post success/read success/latency SLO baseline can be measured | PRD NFR-2/NFR-7, Rollout SLOs, Backlog 5.4 | Pilot metric report with p95 values | [ ] | [ ] | |
-| O-05 | Message-to-wake-trigger p95 <= 3s in pilot environment | PRD NFR-7, Rollout SLOs | Timed integration benchmark report | [ ] | [ ] | |
-| O-06 | Runbooks cover required failure classes and are validated by drill | PRD Launch Criteria, Rollout plan §3.1, Backlog DoD | Runbook docs + drill evidence | [ ] | [ ] | |
+| O-04 | Post success/read success/latency SLO baseline can be measured | PRD NFR-2/NFR-7, Rollout SLOs, Backlog 5.4 | Pilot metric report with p95 values | [x] | [ ] | `docs/proposal/06-operations/reports/pilot_sli_baseline.json`, `apps/bridge-api/src/sli-benchmark.test.ts` |
+| O-05 | Message-to-wake-trigger p95 <= 3s in pilot environment | PRD NFR-7, Rollout SLOs | Timed integration benchmark report | [x] | [ ] | `docs/proposal/06-operations/reports/pilot_sli_baseline.json` (`messageToWakeTriggerP95Ms=4.107ms`) |
+| O-06 | Runbooks cover required failure classes and are validated by drill | PRD Launch Criteria, Rollout plan §3.1, Backlog DoD | Runbook docs + drill evidence | [x] | [ ] | `docs/runbooks/mvp_incident_runbooks.md`, `docs/proposal/06-operations/runbook_drill_evidence.md` |
 
 ## F) Explicit MVP Non-Goals (Must Stay Out)
 

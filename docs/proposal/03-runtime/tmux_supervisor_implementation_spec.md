@@ -263,11 +263,13 @@ stateDiagram-v2
 - `PANE_DEAD`: pane exists but process dead.
 - `SEND_KEYS_ERROR`: tmux command execution failed.
 - `ACK_TIMEOUT`: no acknowledgement after retries.
-- `HUMAN_INPUT_BUSY`: runtime busy due to active human input; trigger deferred.
+- `OPERATOR_BUSY`: runtime busy due to active human input; trigger deferred.
 - `DEFER_TIMEOUT`: deferred trigger exceeded max defer window.
 - `RESUME_FAILED`: fallback resume command failed.
 - `SPAWN_FAILED`: new runtime could not be started.
 - `REGISTRY_DRIFT`: runtime record no longer matches actual tmux state.
+- `TRIGGER_RATE_LIMITED`: per-thread/agent rate limit gate deferred the trigger.
+- `THREAD_AUTO_BLOCKED`: loop safeguard threshold reached and thread was auto-blocked.
 
 ## 11. Reconciliation Loop
 Interval: every 5 seconds (configurable).

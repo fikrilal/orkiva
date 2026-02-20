@@ -8,10 +8,13 @@ module.exports = {
       to: { circular: true }
     },
     {
-      name: "apps-must-not-depend-on-apps",
+      name: "apps-must-not-depend-on-other-apps",
       severity: "error",
-      from: { path: "^apps/" },
-      to: { path: "^apps/" }
+      from: { path: "^apps/([^/]+)/" },
+      to: {
+        path: "^apps/[^/]+/",
+        pathNot: "^apps/$1/"
+      }
     },
     {
       name: "packages-must-not-depend-on-apps",

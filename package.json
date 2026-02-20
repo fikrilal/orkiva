@@ -26,7 +26,8 @@
     "db:ready": "pnpm --filter @orkiva/db db:ready",
     "db:migrate": "pnpm --filter @orkiva/db db:migrate",
     "db:smoke": "pnpm --filter @orkiva/db db:smoke",
-    "db:bootstrap": "pnpm run db:up && pnpm run db:ready && pnpm run db:migrate && pnpm run db:smoke"
+    "db:bootstrap": "pnpm run db:up && pnpm run db:ready && pnpm run db:migrate && pnpm run db:smoke",
+    "ops:sli:pilot": "pnpm run build && tsx infra/scripts/pilot-sli-baseline.ts"
   },
   "devDependencies": {
     "@types/node": "^22.13.10",

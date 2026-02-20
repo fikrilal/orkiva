@@ -9,10 +9,18 @@
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run --config ../../vitest.config.ts",
+    "test:integration": "vitest run --config ../../vitest.config.ts src/app.db.integration.test.ts",
     "dev": "tsx watch src/main.ts",
     "start": "node dist/main.js"
   },
   "dependencies": {
-    "@orkiva/shared": "workspace:*"
+    "@orkiva/auth": "workspace:*",
+    "@orkiva/db": "workspace:*",
+    "@orkiva/domain": "workspace:*",
+    "@orkiva/observability": "workspace:*",
+    "@orkiva/protocol": "workspace:*",
+    "@orkiva/shared": "workspace:*",
+    "drizzle-orm": "^0.44.5",
+    "fastify": "^5.6.1"
   }
 }

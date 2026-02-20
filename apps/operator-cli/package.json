@@ -11,5 +11,11 @@
     "test": "vitest run --config ../../vitest.config.ts",
     "dev": "tsx watch src/main.ts",
     "start": "node dist/main.js"
+  },
+  "dependencies": {
+    "@orkiva/db": "workspace:*",
+    "@orkiva/domain": "workspace:*",
+    "@orkiva/shared": "workspace:*",
+    "drizzle-orm": "^0.44.5"
   }
 }

@@ -165,6 +165,10 @@ Output:
 }
 ```
 
+Idempotency behavior:
+- If `(thread_id, sender_agent_id, idempotency_key)` matches an existing message with the same payload shape, return the original message result.
+- If the same tuple is reused with different payload content, return `IDEMPOTENCY_CONFLICT`.
+
 ## 3.3 read_messages
 Purpose:
 - Fetch ordered message stream after a cursor.
@@ -221,6 +225,10 @@ Output:
   "updated_at": "2026-02-17T12:05:06Z"
 }
 ```
+
+Validation rules:
+- `last_read_seq` must be monotonic per `(thread_id, agent_id)` (no regression).
+- `last_read_seq` must not exceed latest known thread sequence.
 
 ## 3.5 update_thread_status
 Purpose:
@@ -320,16 +328,30 @@ Input:
 Output:
 ```json
 {
+  "trigger_id": "trg_req_8f8f7d8e",
   "target_agent_id": "reviewer_agent",
   "action": "trigger_runtime",
-  "result": "deferred",
-  "defer_reason": "human_input_busy",
-  "deferred_until": "2026-02-17T12:26:03Z",
-  "fallback_action": "resume_session",
-  "runtime_command": "codex exec resume sess_rv_12 \"You have unread messages in thread th_01JXYZ...\"",
+  "result": "queued",
+  "job_status": "queued",
+  "target_session_id": "sess_rv_12",
+  "runtime": "codex_cli",
+  "management_mode": "managed",
+  "session_status": "active",
+  "stale_session": false,
   "triggered_at": "2026-02-17T12:25:03Z"
 }
 ```
+
+Bridge enqueue decision contract (current implementation baseline):
+- `action=trigger_runtime` and `result=queued` only when target has non-stale managed runtime (`status != offline`).
+- `action=fallback_required` and `result=fallback_required` for unmanaged/offline/no-session targets.
+- `fallback_action=resume_session` when resumable + non-stale session exists.
+- `fallback_action=spawn_session` when no resumable non-stale session exists.
+
+Deterministic idempotency baseline:
+- `trigger_id` is deterministic per request ID.
+- Retries with same request ID and same payload return the existing trigger job.
+- Retries with same request ID and different payload return `IDEMPOTENCY_CONFLICT`.
 
 Codex CLI runtime notes:
 - Preferred path: trigger live managed runtime via supervisor PTY delivery.
@@ -380,6 +402,7 @@ Error envelope:
 
 ## 7. Idempotency Rules
 - `post_message` with same `(thread_id, sender_agent_id, idempotency_key)` is treated as retry and returns original message ID.
+- Reuse of the same tuple with different payload content must return `IDEMPOTENCY_CONFLICT`.
 - Idempotency keys are retained for a configurable window (example: 24h).
 
 ## 8. Retention and Archival

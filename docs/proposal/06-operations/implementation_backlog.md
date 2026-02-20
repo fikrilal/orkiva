@@ -113,7 +113,8 @@ Acceptance:
 ### Story 4.2: Metrics and health checks
 Acceptance:
 - Metrics exported for throughput, latency, failure, escalations.
-- Health endpoint reports dependency status.
+- Health endpoint reports liveness and readiness endpoint reports dependency status.
+- Metrics are exposed via a scrapeable endpoint (`/metrics`).
 
 ### Story 4.3: Retry and idempotency hardening
 Acceptance:
@@ -151,6 +152,8 @@ Acceptance:
 Acceptance:
 - End-to-end operation is possible via CLI and JSON outputs only.
 - No dashboard dependency exists in MVP execution path.
+- CLI exposes inspect/escalate/unblock/override control commands.
+- Mutating CLI controls emit audit events with explicit operator reason fields.
 
 ### Story 5.3: Dormant reviewer wake test
 Acceptance:
@@ -209,5 +212,6 @@ Acceptance:
 ## Definition of Done (Project-Level)
 - Core PRD requirements in MVP scope are implemented.
 - Security acceptance criteria validated.
-- Operational runbooks are published.
-- Pilot success metrics are reported.
+- Operational runbooks are published (`docs/runbooks/mvp_incident_runbooks.md`) and drill evidence is recorded (`docs/proposal/06-operations/runbook_drill_evidence.md`).
+- Pilot success metrics are reported (`docs/proposal/06-operations/reports/pilot_sli_baseline.json`).
+- Launch checklist, known risks, rollback plan, and phase-2 handoff are published (`docs/proposal/06-operations/launch_readiness_and_handoff.md`).

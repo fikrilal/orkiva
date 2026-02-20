@@ -71,6 +71,17 @@ Required runbooks:
 - unmanaged runtime target in autonomous lane
 - human-input collision and deferred-trigger timeout
 
+Published artifacts:
+- runbook set: `docs/runbooks/mvp_incident_runbooks.md`
+- drill evidence log: `docs/proposal/06-operations/runbook_drill_evidence.md`
+
+Operator CLI baseline (MVP):
+- `inspect-thread --thread-id <id>` for thread/participant/message/trigger inspection.
+- `escalate-thread --thread-id <id> --reason <text>` to transition a thread to `blocked`.
+- `unblock-thread --thread-id <id> --reason <text>` to transition a thread back to `active`.
+- `override-close-thread --thread-id <id> --reason <human_override:...>` for explicit close overrides.
+- All mutable operations append audit events with operator actor identity.
+
 ## 3.2 Observability
 Metrics:
 - messages posted per minute
@@ -80,10 +91,16 @@ Metrics:
 - escalations per day
 - loop-detection trigger count
 - wake attempts by result (`triggered`, `already_active`, `failed`, `fallback_spawned`)
+- API request counters and cumulative duration exported from `/metrics`
 
 Logs:
 - request-level structured logs with request ID
 - policy decision traces for denied operations
+- supervisor tick lifecycle logs (`tick.completed`, `tick.idle`, `tick.failed`)
+
+Health and readiness:
+- `/health`: process liveness signal.
+- `/ready`: dependency readiness signal (DB query check in bridge-api bootstrap path).
 
 Tracing:
 - correlation from agent request to persistence and notification path
@@ -99,6 +116,11 @@ Initial SLO targets:
 - read success >= 99.5%
 - p95 post-to-visible <= 2s
 - p95 message-to-wake-trigger <= 3s
+
+Measurement artifacts:
+- benchmark runner: `infra/scripts/pilot-sli-baseline.ts`
+- baseline report: `docs/proposal/06-operations/reports/pilot_sli_baseline.json`
+- threshold guard test: `apps/bridge-api/src/sli-benchmark.test.ts`
 
 Default hybrid policy (MVP):
 - supervisor polling interval: 5s
@@ -135,11 +157,13 @@ Default hybrid policy (MVP):
 - token claim mismatch and expired-token rejection
 - cross-workspace isolation
 - malformed payload handling
+- repeated malformed payload bursts remain bounded to deterministic `INVALID_ARGUMENT` responses
 
 ## 4.4 Load Tests
 - sustained multi-thread writes/reads
 - burst traffic behavior
 - storage contention thresholds
+- concurrent write burst scenarios confirm no internal server errors and monotonic persisted sequencing
 
 ## 5. Migration and Backward Compatibility
 - Start with versioned MCP methods (`v1`).
@@ -158,6 +182,10 @@ Default hybrid policy (MVP):
 - Alerting configured and tested.
 - Runbooks published.
 - Pilot sign-off from primary users.
+
+Launch sign-off artifact:
+- `docs/proposal/06-operations/launch_readiness_and_handoff.md`
+- `docs/proposal/06-operations/local_deployment_and_usage.md`
 
 ## 8. Post-Launch Review
 Within 2 weeks:

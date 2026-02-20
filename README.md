@@ -4,11 +4,11 @@ MCP that connects AI agent sessions so they can coordinate work on their own.
 
 ## Status
 
-This repository is currently in **foundation-bootstrap complete** stage.
+This repository is currently in **MVP pilot-ready (A-Z complete)** stage.
 
-- Product, architecture, protocol, runtime, security, and rollout specs are defined.
-- Monorepo scaffold (`apps/*`, `packages/*`, `infra/*`) is implemented.
-- Core runtime/domain logic is not implemented yet (next milestone).
+- Product, architecture, protocol, runtime, security, and rollout specs are implemented and aligned.
+- Core MCP thread/message/session/wake APIs, runtime orchestration, and operator controls are in place.
+- SLO baseline, runbook drill evidence, and launch handoff artifacts are published.
 
 ## Why Orkiva Exists
 
@@ -51,7 +51,7 @@ Planned runtime topology:
 - human-input collision handling
 - fallback chain (`resume` then spawn)
 
-3. `operator-cli` (MVP optional, planned)
+3. `operator-cli`
 
 - operator diagnostics, inspection, and overrides
 
@@ -135,7 +135,6 @@ Reference:
 ├─ packages/                 # domain, protocol, db, auth, observability, shared
 ├─ infra/                    # local infra bootstrap (postgres compose)
 ├─ docs/proposal/            # full proposal specs
-├─ _WIP/                     # implementation roadmap and active todo docs
 ├─ tool/agent/               # Windows/WSL wrappers for dev commands
 └─ AGENTS.md                 # strict contributor/AI rules
 ```
@@ -175,12 +174,39 @@ All changes are expected to pass:
 - `pnpm run test`
 - `pnpm run verify` (runs the full gate stack above)
 
+Operational readiness commands:
+
+- `pnpm run ops:sli:pilot` (build + generate `docs/proposal/06-operations/reports/pilot_sli_baseline.json`)
+
+Operational readiness artifacts:
+
+- `docs/proposal/06-operations/slo_sli_baseline.md`
+- `docs/runbooks/mvp_incident_runbooks.md`
+- `docs/proposal/06-operations/runbook_drill_evidence.md`
+- `docs/proposal/06-operations/launch_readiness_and_handoff.md`
+- `docs/proposal/06-operations/local_deployment_and_usage.md`
+
 Quality policy highlights:
 
 - TypeScript strict mode + hardened compiler flags are mandatory.
 - ESLint forbids `any` and enforces typed import consistency.
 - Architecture boundaries are enforced with `dependency-cruiser`.
 - CI runs `pnpm run verify` on push and pull request.
+
+## Operator CLI Controls
+
+`apps/operator-cli` provides JSON-first operator controls for pilot workflow operations:
+
+- `inspect-thread --thread-id <id>`
+- `escalate-thread --thread-id <id> --reason <text>`
+- `unblock-thread --thread-id <id> --reason <text>`
+- `override-close-thread --thread-id <id> --reason <human_override:...>`
+
+Behavior:
+
+- all status mutations are transition-validated before write
+- blocked->closed requires explicit override reason prefix
+- mutable commands write audit events for traceability
 
 ## Planned Build Sequence
 

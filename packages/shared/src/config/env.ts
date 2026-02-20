@@ -55,6 +55,7 @@ const runtimeConfigSchema = z.object({
   TRIGGER_QUIET_WINDOW_MS: positiveIntWithDefault(20000),
   TRIGGER_RECHECK_MS: positiveIntWithDefault(5000),
   TRIGGER_MAX_DEFER_MS: positiveIntWithDefault(60000),
+  TRIGGER_RATE_LIMIT_PER_MINUTE: positiveIntWithDefault(10),
   LOOP_MAX_TURNS: positiveIntWithDefault(20),
   LOOP_MAX_REPEATED_FINDINGS: positiveIntWithDefault(3),
   SESSION_STALE_AFTER_HOURS: positiveIntWithDefault(12)
