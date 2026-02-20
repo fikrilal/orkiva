@@ -21,6 +21,14 @@ export type TriggerAttemptResult =
   | "fallback_resume_failed"
   | "fallback_spawned";
 
+export interface TriggerAttemptRecord {
+  attemptNo: number;
+  attemptResult: TriggerAttemptResult;
+  errorCode?: string;
+  details?: Record<string, unknown>;
+  createdAt: Date;
+}
+
 export interface TriggerJobRecord {
   triggerId: string;
   threadId: string;
@@ -395,13 +403,15 @@ export class TriggerQueueProcessor {
         if (blocked) {
           autoBlocked += 1;
         }
+        const priorOutcomeDetails = finalOutcome.details;
         finalOutcome = {
           attemptResult: "failed",
           retryable: false,
           errorCode: "THREAD_AUTO_BLOCKED",
           details: {
             threadId: job.threadId,
-            reason: loopGuard.reason
+            reason: loopGuard.reason,
+            ...(priorOutcomeDetails === undefined ? {} : { prior_outcome: priorOutcomeDetails })
           }
         };
         nextStatus = "failed";
@@ -467,16 +477,7 @@ const triggerKey = (triggerId: string): string => triggerId;
 export class InMemoryTriggerQueueStore implements TriggerQueueStore {
   private readonly jobs = new Map<string, TriggerJobRecord>();
   private readonly blockedThreads = new Map<string, { blockedAt: Date; reason: string }>();
-  private readonly attemptsByTrigger = new Map<
-    string,
-    Array<{
-      attemptNo: number;
-      attemptResult: TriggerAttemptResult;
-      errorCode?: string;
-      details?: Record<string, unknown>;
-      createdAt: Date;
-    }>
-  >();
+  private readonly attemptsByTrigger = new Map<string, TriggerAttemptRecord[]>();
 
   public constructor(seedJobs: readonly TriggerJobRecord[] = []) {
     for (const job of seedJobs) {
@@ -573,6 +574,11 @@ export class InMemoryTriggerQueueStore implements TriggerQueueStore {
 
   public getJobById(triggerId: string): Promise<TriggerJobRecord | null> {
     return Promise.resolve(this.jobs.get(triggerKey(triggerId)) ?? null);
+  }
+
+  public getAttemptsByTrigger(triggerId: string): readonly TriggerAttemptRecord[] {
+    const attempts = this.attemptsByTrigger.get(triggerId) ?? [];
+    return attempts.map((attempt) => ({ ...attempt }));
   }
 
   public markThreadBlocked(input: {

@@ -261,6 +261,78 @@ describe("ManagedRuntimeTriggerJobExecutor", () => {
     });
   });
 
+  it("bypasses quiet-window defer with explicit force override and emits audit details", async () => {
+    const runtimeStore = new InMemoryRuntimeRegistryStore();
+    await seedRuntime(runtimeStore);
+    const deliver = vi
+      .fn<TriggerPtyAdapter["deliver"]>()
+      .mockResolvedValueOnce({
+        delivered: false,
+        errorCode: "OPERATOR_BUSY",
+        details: {
+          target: "agents_mobile_core:reviewer.0"
+        }
+      })
+      .mockResolvedValueOnce({
+        delivered: true,
+        details: {
+          target: "agents_mobile_core:reviewer.0"
+        }
+      });
+    const ptyAdapter: TriggerPtyAdapter = {
+      deliver
+    };
+    const executor = new ManagedRuntimeTriggerJobExecutor(runtimeStore, ptyAdapter, {
+      quietWindowMs: 20_000,
+      recheckMs: 5_000,
+      maxDeferMs: 60_000
+    });
+
+    const first = await executor.execute({
+      job: baseJob({
+        triggerId: "trg_09",
+        reason: "new_unread_messages",
+        createdAt: new Date("2026-02-18T10:00:00.000Z")
+      }),
+      attemptNo: 1,
+      now: new Date("2026-02-18T10:00:05.000Z")
+    });
+    expect(first.attemptResult).toBe("deferred");
+
+    const second = await executor.execute({
+      job: baseJob({
+        triggerId: "trg_10",
+        reason: "human_override:urgent_escalation",
+        createdAt: new Date("2026-02-18T10:00:00.000Z")
+      }),
+      attemptNo: 1,
+      now: new Date("2026-02-18T10:00:06.000Z")
+    });
+
+    expect(second).toEqual({
+      attemptResult: "delivered",
+      retryable: false,
+      details: {
+        target: "agents_mobile_core:reviewer.0",
+        force_override_audit: {
+          force_override_requested: true,
+          force_override_applied: true,
+          override_intent: "human_override",
+          override_reason_prefix: "human_override:",
+          collision_gate: "bypassed"
+        }
+      }
+    });
+    expect(deliver).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        triggerId: "trg_10",
+        reason: "human_override:urgent_escalation",
+        forceOverride: true
+      })
+    );
+  });
+
   it("defers when operator is busy and respects defer timeout", async () => {
     const runtimeStore = new InMemoryRuntimeRegistryStore();
     await seedRuntime(runtimeStore);

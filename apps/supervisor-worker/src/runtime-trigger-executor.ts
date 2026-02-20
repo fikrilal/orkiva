@@ -12,7 +12,13 @@ const RETRYABLE_DELIVERY_FAILURE_CODES = new Set([
   "SEND_KEYS_ERROR",
   "OPERATOR_BUSY"
 ]);
-const FORCE_OVERRIDE_REASON_PREFIXES = ["human_override:", "coordinator_override:"] as const;
+const FORCE_OVERRIDE_REASON_PREFIXES = {
+  human_override: "human_override:",
+  coordinator_override: "coordinator_override:"
+} as const;
+type OverrideIntent = keyof typeof FORCE_OVERRIDE_REASON_PREFIXES;
+type OverrideReasonPrefix = (typeof FORCE_OVERRIDE_REASON_PREFIXES)[OverrideIntent];
+type CollisionGateMode = "enforced" | "bypassed" | "not_evaluated";
 
 export interface RuntimeTriggerSafeguardConfig {
   quietWindowMs: number;
@@ -44,6 +50,62 @@ const buildRuntimeSnapshot = (job: TriggerJobRecord): Record<string, unknown> =>
   targetSessionId: job.targetSessionId
 });
 
+const parseForceOverrideIntent = (reason: string): {
+  requested: boolean;
+  intent: OverrideIntent | null;
+  reasonPrefix: OverrideReasonPrefix | null;
+} => {
+  if (reason.startsWith(FORCE_OVERRIDE_REASON_PREFIXES.human_override)) {
+    return {
+      requested: true,
+      intent: "human_override",
+      reasonPrefix: FORCE_OVERRIDE_REASON_PREFIXES.human_override
+    };
+  }
+
+  if (reason.startsWith(FORCE_OVERRIDE_REASON_PREFIXES.coordinator_override)) {
+    return {
+      requested: true,
+      intent: "coordinator_override",
+      reasonPrefix: FORCE_OVERRIDE_REASON_PREFIXES.coordinator_override
+    };
+  }
+
+  return {
+    requested: false,
+    intent: null,
+    reasonPrefix: null
+  };
+};
+
+const withForceOverrideAudit = (
+  base: TriggerExecutionOutcome,
+  override: {
+    requested: boolean;
+    intent: OverrideIntent | null;
+    reasonPrefix: OverrideReasonPrefix | null;
+  },
+  input: {
+    applied: boolean;
+    collisionGate: CollisionGateMode;
+  }
+): TriggerExecutionOutcome => {
+  if (!override.requested) {
+    return base;
+  }
+
+  return withDetails(base, {
+    ...(base.details === undefined ? {} : base.details),
+    force_override_audit: {
+      force_override_requested: true,
+      force_override_applied: input.applied,
+      override_intent: override.intent,
+      override_reason_prefix: override.reasonPrefix,
+      collision_gate: input.collisionGate
+    }
+  });
+};
+
 export class ManagedRuntimeTriggerJobExecutor implements TriggerJobExecutor {
   private readonly lastBusyAtByRuntime = new Map<string, Date>();
 
@@ -59,69 +121,99 @@ export class ManagedRuntimeTriggerJobExecutor implements TriggerJobExecutor {
     now: Date;
   }): Promise<TriggerExecutionOutcome> {
     void input.attemptNo;
-    void input.now;
+    const overrideIntent = parseForceOverrideIntent(input.job.reason);
+    const withOverrideAudit = (
+      outcome: TriggerExecutionOutcome,
+      params: {
+        applied: boolean;
+        collisionGate: CollisionGateMode;
+      }
+    ): TriggerExecutionOutcome => withForceOverrideAudit(outcome, overrideIntent, params);
 
     const runtime = await this.runtimeRegistryStore.getRuntime(
       input.job.targetAgentId,
       input.job.workspaceId
     );
     if (runtime === null) {
-      return withDetails(
+      return withOverrideAudit(
+        withDetails(
+          {
+            attemptResult: "failed",
+            retryable: false,
+            errorCode: "RUNTIME_NOT_FOUND"
+          },
+          buildRuntimeSnapshot(input.job)
+        ),
         {
-          attemptResult: "failed",
-          retryable: false,
-          errorCode: "RUNTIME_NOT_FOUND"
-        },
-        buildRuntimeSnapshot(input.job)
+          applied: false,
+          collisionGate: "not_evaluated"
+        }
       );
     }
 
     if (input.job.targetSessionId !== null && runtime.sessionId !== input.job.targetSessionId) {
-      return withDetails(
+      return withOverrideAudit(
+        withDetails(
+          {
+            attemptResult: "failed",
+            retryable: false,
+            errorCode: "RUNTIME_SESSION_MISMATCH"
+          },
+          {
+            ...buildRuntimeSnapshot(input.job),
+            runtimeSessionId: runtime.sessionId
+          }
+        ),
         {
-          attemptResult: "failed",
-          retryable: false,
-          errorCode: "RUNTIME_SESSION_MISMATCH"
-        },
-        {
-          ...buildRuntimeSnapshot(input.job),
-          runtimeSessionId: runtime.sessionId
+          applied: false,
+          collisionGate: "not_evaluated"
         }
       );
     }
 
     if (runtime.managementMode !== "managed") {
-      return withDetails(
+      return withOverrideAudit(
+        withDetails(
+          {
+            attemptResult: "failed",
+            retryable: false,
+            errorCode: "RUNTIME_UNMANAGED"
+          },
+          {
+            ...buildRuntimeSnapshot(input.job),
+            managementMode: runtime.managementMode
+          }
+        ),
         {
-          attemptResult: "failed",
-          retryable: false,
-          errorCode: "RUNTIME_UNMANAGED"
-        },
-        {
-          ...buildRuntimeSnapshot(input.job),
-          managementMode: runtime.managementMode
+          applied: false,
+          collisionGate: "not_evaluated"
         }
       );
     }
 
     if (runtime.status === "offline") {
-      return withDetails(
+      return withOverrideAudit(
+        withDetails(
+          {
+            attemptResult: "timeout",
+            retryable: true,
+            errorCode: "RUNTIME_OFFLINE"
+          },
+          {
+            ...buildRuntimeSnapshot(input.job),
+            status: runtime.status
+          }
+        ),
         {
-          attemptResult: "timeout",
-          retryable: true,
-          errorCode: "RUNTIME_OFFLINE"
-        },
-        {
-          ...buildRuntimeSnapshot(input.job),
-          status: runtime.status
+          applied: false,
+          collisionGate: "not_evaluated"
         }
       );
     }
 
     const runtimeKey = `${runtime.workspaceId}:${runtime.agentId}:${runtime.runtime}`;
-    const forceOverride = FORCE_OVERRIDE_REASON_PREFIXES.some((prefix) =>
-      input.job.reason.startsWith(prefix)
-    );
+    const forceOverride = overrideIntent.requested;
+    const collisionGate: CollisionGateMode = forceOverride ? "bypassed" : "enforced";
     const lastBusyAt = this.lastBusyAtByRuntime.get(runtimeKey);
     if (
       !forceOverride &&
@@ -130,28 +222,40 @@ export class ManagedRuntimeTriggerJobExecutor implements TriggerJobExecutor {
     ) {
       const deferredMs = input.now.getTime() - input.job.createdAt.getTime();
       if (deferredMs >= this.safeguards.maxDeferMs) {
-        return {
-          attemptResult: "timeout",
-          retryable: false,
-          errorCode: "DEFER_TIMEOUT",
-          details: {
-            runtime: runtime.runtime,
-            deferredMs,
-            maxDeferMs: this.safeguards.maxDeferMs
+        return withOverrideAudit(
+          {
+            attemptResult: "timeout",
+            retryable: false,
+            errorCode: "DEFER_TIMEOUT",
+            details: {
+              runtime: runtime.runtime,
+              deferredMs,
+              maxDeferMs: this.safeguards.maxDeferMs
+            }
+          },
+          {
+            applied: false,
+            collisionGate: "enforced"
           }
-        };
+        );
       }
 
-      return {
-        attemptResult: "deferred",
-        retryable: true,
-        errorCode: "OPERATOR_BUSY",
-        retryAfterMs: this.safeguards.recheckMs,
-        details: {
-          runtime: runtime.runtime,
-          quietWindowMs: this.safeguards.quietWindowMs
+      return withOverrideAudit(
+        {
+          attemptResult: "deferred",
+          retryable: true,
+          errorCode: "OPERATOR_BUSY",
+          retryAfterMs: this.safeguards.recheckMs,
+          details: {
+            runtime: runtime.runtime,
+            quietWindowMs: this.safeguards.quietWindowMs
+          }
+        },
+        {
+          applied: false,
+          collisionGate: "enforced"
         }
-      };
+      );
     }
 
     const delivery = await this.ptyAdapter.deliver({
@@ -164,59 +268,89 @@ export class ManagedRuntimeTriggerJobExecutor implements TriggerJobExecutor {
     });
     if (delivery.delivered) {
       this.lastBusyAtByRuntime.delete(runtimeKey);
-      return {
-        attemptResult: "delivered",
-        retryable: false,
-        ...(delivery.details === undefined ? {} : { details: delivery.details })
-      };
+      return withOverrideAudit(
+        {
+          attemptResult: "delivered",
+          retryable: false,
+          ...(delivery.details === undefined ? {} : { details: delivery.details })
+        },
+        {
+          applied: forceOverride,
+          collisionGate
+        }
+      );
     }
 
     if (delivery.errorCode === "OPERATOR_BUSY") {
       const deferredMs = input.now.getTime() - input.job.createdAt.getTime();
       this.lastBusyAtByRuntime.set(runtimeKey, input.now);
       if (deferredMs >= this.safeguards.maxDeferMs) {
-        return {
-          attemptResult: "timeout",
-          retryable: false,
-          errorCode: "DEFER_TIMEOUT",
+        return withOverrideAudit(
+          {
+            attemptResult: "timeout",
+            retryable: false,
+            errorCode: "DEFER_TIMEOUT",
+            details: {
+              runtime: runtime.runtime,
+              deferredMs,
+              maxDeferMs: this.safeguards.maxDeferMs,
+              ...(delivery.details === undefined ? {} : { delivery: delivery.details })
+            }
+          },
+          {
+            applied: forceOverride,
+            collisionGate
+          }
+        );
+      }
+
+      return withOverrideAudit(
+        {
+          attemptResult: "deferred",
+          retryable: true,
+          errorCode: delivery.errorCode,
+          retryAfterMs: this.safeguards.recheckMs,
           details: {
             runtime: runtime.runtime,
             deferredMs,
+            quietWindowMs: this.safeguards.quietWindowMs,
             maxDeferMs: this.safeguards.maxDeferMs,
             ...(delivery.details === undefined ? {} : { delivery: delivery.details })
           }
-        };
-      }
-
-      return {
-        attemptResult: "deferred",
-        retryable: true,
-        errorCode: delivery.errorCode,
-        retryAfterMs: this.safeguards.recheckMs,
-        details: {
-          runtime: runtime.runtime,
-          deferredMs,
-          quietWindowMs: this.safeguards.quietWindowMs,
-          maxDeferMs: this.safeguards.maxDeferMs,
-          ...(delivery.details === undefined ? {} : { delivery: delivery.details })
+        },
+        {
+          applied: forceOverride,
+          collisionGate
         }
-      };
+      );
     }
 
     if (RETRYABLE_DELIVERY_FAILURE_CODES.has(delivery.errorCode)) {
-      return {
-        attemptResult: "timeout",
-        retryable: true,
-        errorCode: delivery.errorCode,
-        ...(delivery.details === undefined ? {} : { details: delivery.details })
-      };
+      return withOverrideAudit(
+        {
+          attemptResult: "timeout",
+          retryable: true,
+          errorCode: delivery.errorCode,
+          ...(delivery.details === undefined ? {} : { details: delivery.details })
+        },
+        {
+          applied: forceOverride,
+          collisionGate
+        }
+      );
     }
 
-    return {
-      attemptResult: "failed",
-      retryable: false,
-      errorCode: delivery.errorCode,
-      ...(delivery.details === undefined ? {} : { details: delivery.details })
-    };
+    return withOverrideAudit(
+      {
+        attemptResult: "failed",
+        retryable: false,
+        errorCode: delivery.errorCode,
+        ...(delivery.details === undefined ? {} : { details: delivery.details })
+      },
+      {
+        applied: forceOverride,
+        collisionGate
+      }
+    );
   }
 }

@@ -1,5 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
 
+import type { TriggerPtyAdapter } from "./pty-adapter.js";
+import { InMemoryRuntimeRegistryStore } from "./runtime-registry.js";
+import { ManagedRuntimeTriggerJobExecutor } from "./runtime-trigger-executor.js";
 import {
   InMemoryTriggerQueueStore,
   NoopTriggerFallbackExecutor,
@@ -18,6 +21,7 @@ const queuedJob = (input: {
   nextRetryAt?: Date | null;
   threadId?: string;
   targetAgentId?: string;
+  reason?: string;
   createdAt?: Date;
   updatedAt?: Date;
 }): TriggerJobRecord => ({
@@ -26,7 +30,7 @@ const queuedJob = (input: {
   workspaceId: "wk_01",
   targetAgentId: input.targetAgentId ?? "reviewer_agent",
   targetSessionId: "sess_01",
-  reason: "new_unread_messages",
+  reason: input.reason ?? "new_unread_messages",
   prompt: "Read unread and continue.",
   status: input.status ?? "queued",
   attempts: input.attempts ?? 0,
@@ -285,5 +289,110 @@ describe("trigger queue processing", () => {
     const final = await store.getJobById("trg_08");
     expect(final?.status).toBe("delivered");
     expect(final?.attempts).toBe(1);
+  });
+
+  it("persists explicit force-override audit details in trigger attempts", async () => {
+    const store = new InMemoryTriggerQueueStore([
+      queuedJob({
+        triggerId: "trg_09",
+        maxRetries: 2,
+        reason: "human_override:urgent_escalation"
+      })
+    ]);
+    const runtimeStore = new InMemoryRuntimeRegistryStore();
+    await runtimeStore.upsertFromHeartbeat({
+      agentId: "reviewer_agent",
+      workspaceId: "wk_01",
+      sessionId: "sess_01",
+      runtime: "tmux:agents_mobile_core:reviewer.0",
+      managementMode: "managed",
+      resumable: true,
+      status: "active",
+      heartbeatAt: new Date("2026-02-18T10:00:00.000Z")
+    });
+    const deliver = vi.fn<TriggerPtyAdapter["deliver"]>(() =>
+      Promise.resolve({
+        delivered: true,
+        details: {
+          target: "agents_mobile_core:reviewer.0"
+        }
+      })
+    );
+    const executor = new ManagedRuntimeTriggerJobExecutor(runtimeStore, { deliver });
+    const processor = new TriggerQueueProcessor(store, executor, new NoopTriggerFallbackExecutor());
+
+    const result = await processor.processDueJobs({
+      workspaceId: "wk_01",
+      limit: 10,
+      processedAt: new Date("2026-02-18T10:01:00.000Z")
+    });
+
+    expect(result.delivered).toBe(1);
+    const attempts = store.getAttemptsByTrigger("trg_09");
+    expect(attempts).toHaveLength(1);
+    const details = attempts[0]?.details;
+    const audit = details?.["force_override_audit"] as Record<string, unknown> | undefined;
+    expect(audit).toEqual({
+      force_override_requested: true,
+      force_override_applied: true,
+      override_intent: "human_override",
+      override_reason_prefix: "human_override:",
+      collision_gate: "bypassed"
+    });
+    expect(deliver).toHaveBeenCalledWith(
+      expect.objectContaining({
+        triggerId: "trg_09",
+        forceOverride: true
+      })
+    );
+  });
+
+  it("preserves prior attempt details when loop guard auto-blocks", async () => {
+    const store = new InMemoryTriggerQueueStore([
+      queuedJob({
+        triggerId: "trg_10",
+        maxRetries: 2
+      })
+    ]);
+    const executor: TriggerJobExecutor = {
+      execute: () =>
+        Promise.resolve({
+          attemptResult: "timeout",
+          retryable: true,
+          errorCode: "SAME_FINDING",
+          details: {
+            force_override_audit: {
+              force_override_requested: true,
+              force_override_applied: true,
+              override_intent: "human_override",
+              override_reason_prefix: "human_override:",
+              collision_gate: "bypassed"
+            }
+          }
+        } satisfies TriggerExecutionOutcome)
+    };
+    const processor = new TriggerQueueProcessor(store, executor, new NoopTriggerFallbackExecutor(), {
+      deferRecheckMs: 5000,
+      rateLimitPerMinute: 10,
+      loopMaxTurns: 1,
+      loopMaxRepeatedFindings: 3
+    });
+
+    const result = await processor.processDueJobs({
+      workspaceId: "wk_01",
+      limit: 10,
+      processedAt: new Date("2026-02-18T10:01:00.000Z")
+    });
+
+    expect(result.autoBlocked).toBe(1);
+    const attempts = store.getAttemptsByTrigger("trg_10");
+    expect(attempts).toHaveLength(1);
+    expect(attempts[0]?.errorCode).toBe("THREAD_AUTO_BLOCKED");
+    const details = attempts[0]?.details;
+    const priorOutcome = details?.["prior_outcome"] as Record<string, unknown> | undefined;
+    const audit = priorOutcome?.["force_override_audit"] as Record<string, unknown> | undefined;
+    expect(audit?.["force_override_requested"]).toBe(true);
+    expect(audit?.["force_override_applied"]).toBe(true);
+    expect(details?.["reason"]).toBe("no_progress_turns:1");
   });
 });

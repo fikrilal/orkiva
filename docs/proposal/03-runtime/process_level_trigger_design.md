@@ -231,6 +231,12 @@ Benefit:
 - Trigger requests transition to `deferred` state and remain queued.
 - Deferred trigger auto-resumes when quiet window condition is met.
 - Manual force-override is explicit and audit-logged, not implicit.
+- Force-override attempts persist explicit audit metadata in trigger-attempt details:
+  - `force_override_requested`
+  - `force_override_applied`
+  - `override_intent` (`human_override` or `coordinator_override`)
+  - `override_reason_prefix` (`human_override:` or `coordinator_override:`)
+  - `collision_gate` (`enforced`, `bypassed`, or `not_evaluated`)
 - After manual worker intervention, orchestrator receives sync trigger before autonomous flow continues.
 
 ## 14. Operational Guardrails

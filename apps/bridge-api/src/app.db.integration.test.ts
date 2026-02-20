@@ -7,6 +7,7 @@ import {
   createThreadOutputSchema,
   heartbeatSessionOutputSchema,
   postMessageOutputSchema,
+  protocolErrorResponseSchema,
   readMessagesOutputSchema,
   triggerParticipantOutputSchema
 } from "@orkiva/protocol";
@@ -14,7 +15,12 @@ import {
 import { createBridgeApiApp } from "./app.js";
 import { DbAuditStore } from "./audit-store.js";
 import { DbSessionStore } from "./session-store.js";
-import { DbThreadStore } from "./thread-store.js";
+import {
+  DbThreadStore,
+  type CreateMessageRecordInput,
+  type MessageRecord,
+  type ReadMessagesResult
+} from "./thread-store.js";
 import { DbTriggerStore } from "./trigger-store.js";
 
 const runIntegration =
@@ -41,6 +47,58 @@ const tokenMap: Readonly<Record<string, VerifiedAuthClaims>> = {
   participant_wk1: makeClaims("participant", "wk_01", "participant_agent"),
   auditor_wk1: makeClaims("auditor", "wk_01", "auditor_agent")
 };
+
+class FaultInjectingDbThreadStore extends DbThreadStore {
+  private failAfterPersistedWriteOnce = false;
+  private failRecoveryIdempotencyLookupOnce = false;
+  private failReadMessagesOnce = false;
+
+  public injectPostWriteFault(): void {
+    this.failAfterPersistedWriteOnce = true;
+    this.failRecoveryIdempotencyLookupOnce = false;
+  }
+
+  public injectReadMessagesFault(): void {
+    this.failReadMessagesOnce = true;
+  }
+
+  public override async createMessage(input: CreateMessageRecordInput): Promise<MessageRecord> {
+    const created = await super.createMessage(input);
+    if (this.failAfterPersistedWriteOnce) {
+      this.failAfterPersistedWriteOnce = false;
+      this.failRecoveryIdempotencyLookupOnce = true;
+      throw new Error("Injected transient db post-write failure");
+    }
+
+    return created;
+  }
+
+  public override async getMessageByIdempotency(
+    threadId: string,
+    senderAgentId: string,
+    idempotencyKey: string
+  ): Promise<MessageRecord | null> {
+    if (this.failRecoveryIdempotencyLookupOnce) {
+      this.failRecoveryIdempotencyLookupOnce = false;
+      throw new Error("Injected transient db idempotency lookup failure");
+    }
+
+    return super.getMessageByIdempotency(threadId, senderAgentId, idempotencyKey);
+  }
+
+  public override async readMessages(
+    threadId: string,
+    sinceSeq: number,
+    limit: number
+  ): Promise<ReadMessagesResult> {
+    if (this.failReadMessagesOnce) {
+      this.failReadMessagesOnce = false;
+      throw new Error("Injected transient db read failure");
+    }
+
+    return super.readMessages(threadId, sinceSeq, limit);
+  }
+}
 
 describeDb("bridge-api db integration", () => {
   const databaseUrl = process.env["DATABASE_URL"] as string;
@@ -206,7 +264,7 @@ describeDb("bridge-api db integration", () => {
       }
     });
     expect(createThread.statusCode).toBe(200);
-    createThreadOutputSchema.parse(createThread.json());
+    const createdThread = createThreadOutputSchema.parse(createThread.json());
 
     const firstPost = await app.inject({
       method: "POST",
@@ -215,7 +273,7 @@ describeDb("bridge-api db integration", () => {
         authorization: "Bearer participant_wk1"
       },
       payload: {
-        thread_id: "th_fixed-id",
+        thread_id: createdThread.thread_id,
         schema_version: 1,
         kind: "event",
         body: "event payload from postgres",
@@ -235,7 +293,7 @@ describeDb("bridge-api db integration", () => {
         authorization: "Bearer participant_wk1"
       },
       payload: {
-        thread_id: "th_fixed-id",
+        thread_id: createdThread.thread_id,
         schema_version: 1,
         kind: "event",
         body: "event payload from postgres",
@@ -257,7 +315,7 @@ describeDb("bridge-api db integration", () => {
         authorization: "Bearer coordinator_wk1"
       },
       payload: {
-        thread_id: "th_fixed-id",
+        thread_id: createdThread.thread_id,
         since_seq: 0,
         limit: 10
       }
@@ -269,6 +327,216 @@ describeDb("bridge-api db integration", () => {
       throw new Error("Expected event message");
     }
     expect(readPayload.messages[0].metadata["event_version"]).toBe(1);
+  });
+
+  it("replays idempotent post_message after transient db post-write failure without message loss", async () => {
+    const faultThreadStore = new FaultInjectingDbThreadStore(db);
+    const faultApp = createBridgeApiApp({
+      threadStore: faultThreadStore,
+      sessionStore,
+      triggerStore: new DbTriggerStore(db),
+      auditStore: new DbAuditStore(db),
+      verifyAccessToken: (token) => {
+        const claims = tokenMap[token];
+        if (!claims) {
+          throw new AuthError("UNAUTHORIZED", "Token not recognized");
+        }
+
+        return Promise.resolve(claims);
+      },
+      now: () => new Date("2026-02-18T10:00:00.000Z")
+    });
+
+    try {
+      const createThread = await faultApp.inject({
+        method: "POST",
+        url: "/v1/mcp/create_thread",
+        headers: {
+          authorization: "Bearer coordinator_wk1"
+        },
+        payload: {
+          workspace_id: "wk_01",
+          title: "db fault replay thread",
+          type: "workflow",
+          participants: ["participant_agent", "coordinator_agent"]
+        }
+      });
+      expect(createThread.statusCode).toBe(200);
+      const createdThread = createThreadOutputSchema.parse(createThread.json());
+
+      faultThreadStore.injectPostWriteFault();
+      const requestPayload = {
+        thread_id: createdThread.thread_id,
+        schema_version: 1,
+        kind: "chat" as const,
+        body: "db fault replay payload",
+        idempotency_key: "idem_fault_db_01"
+      };
+
+      const firstAttempt = await faultApp.inject({
+        method: "POST",
+        url: "/v1/mcp/post_message",
+        headers: {
+          authorization: "Bearer participant_wk1"
+        },
+        payload: requestPayload
+      });
+      expect(firstAttempt.statusCode).toBe(500);
+      const firstErrorPayload = protocolErrorResponseSchema.parse(firstAttempt.json());
+      expect(firstErrorPayload.error.code).toBe("INTERNAL");
+
+      const replayAttempt = await faultApp.inject({
+        method: "POST",
+        url: "/v1/mcp/post_message",
+        headers: {
+          authorization: "Bearer participant_wk1"
+        },
+        payload: requestPayload
+      });
+      expect(replayAttempt.statusCode).toBe(200);
+      const replayPayload = postMessageOutputSchema.parse(replayAttempt.json());
+      expect(replayPayload.seq).toBe(1);
+
+      const rowCount = await pool.query<{ total: string }>(
+        `
+        select count(*)::text as total
+        from messages
+        where thread_id = $1 and sender_agent_id = $2 and idempotency_key = $3
+        `,
+        [createdThread.thread_id, "participant_agent", "idem_fault_db_01"]
+      );
+      expect(rowCount.rows[0]?.total).toBe("1");
+
+      const readBack = await faultApp.inject({
+        method: "POST",
+        url: "/v1/mcp/read_messages",
+        headers: {
+          authorization: "Bearer participant_wk1"
+        },
+        payload: {
+          thread_id: createdThread.thread_id,
+          since_seq: 0,
+          limit: 10
+        }
+      });
+      expect(readBack.statusCode).toBe(200);
+      const readPayload = readMessagesOutputSchema.parse(readBack.json());
+      expect(readPayload.messages).toHaveLength(1);
+      expect(readPayload.messages[0]?.body).toBe("db fault replay payload");
+      expect(readPayload.messages[0]?.seq).toBe(replayPayload.seq);
+    } finally {
+      await faultApp.close();
+    }
+  });
+
+  it("retains acknowledged messages after transient db read failure on replay", async () => {
+    const faultThreadStore = new FaultInjectingDbThreadStore(db);
+    const faultApp = createBridgeApiApp({
+      threadStore: faultThreadStore,
+      sessionStore,
+      triggerStore: new DbTriggerStore(db),
+      auditStore: new DbAuditStore(db),
+      verifyAccessToken: (token) => {
+        const claims = tokenMap[token];
+        if (!claims) {
+          throw new AuthError("UNAUTHORIZED", "Token not recognized");
+        }
+
+        return Promise.resolve(claims);
+      },
+      now: () => new Date("2026-02-18T10:00:00.000Z")
+    });
+
+    try {
+      const createThread = await faultApp.inject({
+        method: "POST",
+        url: "/v1/mcp/create_thread",
+        headers: {
+          authorization: "Bearer coordinator_wk1"
+        },
+        payload: {
+          workspace_id: "wk_01",
+          title: "db ack replay thread",
+          type: "workflow",
+          participants: ["participant_agent", "coordinator_agent"]
+        }
+      });
+      expect(createThread.statusCode).toBe(200);
+      const createdThread = createThreadOutputSchema.parse(createThread.json());
+
+      const post = await faultApp.inject({
+        method: "POST",
+        url: "/v1/mcp/post_message",
+        headers: {
+          authorization: "Bearer participant_wk1"
+        },
+        payload: {
+          thread_id: createdThread.thread_id,
+          schema_version: 1,
+          kind: "chat",
+          body: "ack-safe payload",
+          idempotency_key: "idem_ack_safe_01"
+        }
+      });
+      expect(post.statusCode).toBe(200);
+      postMessageOutputSchema.parse(post.json());
+
+      const ack = await faultApp.inject({
+        method: "POST",
+        url: "/v1/mcp/ack_read",
+        headers: {
+          authorization: "Bearer participant_wk1"
+        },
+        payload: {
+          thread_id: createdThread.thread_id,
+          last_read_seq: 1
+        }
+      });
+      expect(ack.statusCode).toBe(200);
+      ackReadOutputSchema.parse(ack.json());
+
+      faultThreadStore.injectReadMessagesFault();
+      const firstRead = await faultApp.inject({
+        method: "POST",
+        url: "/v1/mcp/read_messages",
+        headers: {
+          authorization: "Bearer participant_wk1"
+        },
+        payload: {
+          thread_id: createdThread.thread_id,
+          since_seq: 0,
+          limit: 10
+        }
+      });
+      expect(firstRead.statusCode).toBe(500);
+      const firstReadError = protocolErrorResponseSchema.parse(firstRead.json());
+      expect(firstReadError.error.code).toBe("INTERNAL");
+
+      const replayRead = await faultApp.inject({
+        method: "POST",
+        url: "/v1/mcp/read_messages",
+        headers: {
+          authorization: "Bearer participant_wk1"
+        },
+        payload: {
+          thread_id: createdThread.thread_id,
+          since_seq: 0,
+          limit: 10
+        }
+      });
+      expect(replayRead.statusCode).toBe(200);
+      const replayReadPayload = readMessagesOutputSchema.parse(replayRead.json());
+      expect(replayReadPayload.messages).toHaveLength(1);
+      expect(replayReadPayload.messages[0]?.body).toBe("ack-safe payload");
+
+      const rowCount = await pool.query<{ total: string }>(
+        "select count(*)::text as total from messages where thread_id = $1",
+        [createdThread.thread_id]
+      );
+      expect(rowCount.rows[0]?.total).toBe("1");
+    } finally {
+      await faultApp.close();
+    }
   });
 
   it("persists heartbeat_session and supports latest resumable lookup", async () => {
@@ -319,7 +587,7 @@ describeDb("bridge-api db integration", () => {
       }
     });
     expect(createThread.statusCode).toBe(200);
-    createThreadOutputSchema.parse(createThread.json());
+    const createdThread = createThreadOutputSchema.parse(createThread.json());
 
     const heartbeat = await app.inject({
       method: "POST",
@@ -346,7 +614,7 @@ describeDb("bridge-api db integration", () => {
         "x-request-id": "req_db_trigger_01"
       },
       payload: {
-        thread_id: "th_fixed-id",
+        thread_id: createdThread.thread_id,
         target_agent_id: "participant_agent",
         reason: "new_unread_messages",
         trigger_prompt: "Continue processing unread work."
@@ -365,7 +633,7 @@ describeDb("bridge-api db integration", () => {
         "x-request-id": "req_db_trigger_01"
       },
       payload: {
-        thread_id: "th_fixed-id",
+        thread_id: createdThread.thread_id,
         target_agent_id: "participant_agent",
         reason: "new_unread_messages",
         trigger_prompt: "Continue processing unread work."

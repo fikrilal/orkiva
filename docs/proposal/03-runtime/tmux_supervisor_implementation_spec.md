@@ -289,6 +289,12 @@ Algorithm:
 - Control characters sanitized before `send-keys`.
 - Restrict supervisor to allowlisted workspace directories.
 - Audit every trigger with `trigger_id`, `agent_id`, `thread_id`, `result`.
+- Force-override attempts must persist structured audit details in trigger attempts:
+  - `force_override_requested`
+  - `force_override_applied`
+  - `override_intent`
+  - `override_reason_prefix`
+  - `collision_gate`
 - Redact pane captures before persistent logging.
 - Runtime bridge calls must use platform-issued short-lived tokens; payload identity fields are not trusted.
 - Force overrides on busy panes must include operator identity and explicit reason.

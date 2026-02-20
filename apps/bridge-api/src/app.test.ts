@@ -18,7 +18,12 @@ import {
 import { createBridgeApiApp } from "./app.js";
 import { InMemoryAuditStore } from "./audit-store.js";
 import { InMemorySessionStore } from "./session-store.js";
-import { InMemoryThreadStore, type ThreadRecord } from "./thread-store.js";
+import {
+  InMemoryThreadStore,
+  type CreateMessageRecordInput,
+  type MessageRecord,
+  type ThreadRecord
+} from "./thread-store.js";
 import { InMemoryTriggerStore } from "./trigger-store.js";
 
 class ConflictOnSecondStatusUpdateStore extends InMemoryThreadStore {
@@ -42,6 +47,40 @@ class ConflictOnSecondStatusUpdateStore extends InMemoryThreadStore {
     }
 
     return updated;
+  }
+}
+
+class FaultInjectingInMemoryThreadStore extends InMemoryThreadStore {
+  private failAfterPersistedWriteOnce = false;
+  private failRecoveryIdempotencyLookupOnce = false;
+
+  public injectPostWriteFault(): void {
+    this.failAfterPersistedWriteOnce = true;
+    this.failRecoveryIdempotencyLookupOnce = false;
+  }
+
+  public override async createMessage(input: CreateMessageRecordInput): Promise<MessageRecord> {
+    const created = await super.createMessage(input);
+    if (this.failAfterPersistedWriteOnce) {
+      this.failAfterPersistedWriteOnce = false;
+      this.failRecoveryIdempotencyLookupOnce = true;
+      throw new Error("Injected transient post-write failure");
+    }
+
+    return created;
+  }
+
+  public override async getMessageByIdempotency(
+    threadId: string,
+    senderAgentId: string,
+    idempotencyKey: string
+  ): Promise<MessageRecord | null> {
+    if (this.failRecoveryIdempotencyLookupOnce) {
+      this.failRecoveryIdempotencyLookupOnce = false;
+      throw new Error("Injected transient idempotency lookup failure");
+    }
+
+    return super.getMessageByIdempotency(threadId, senderAgentId, idempotencyKey);
   }
 }
 
@@ -1001,6 +1040,79 @@ describe("bridge-api phase 4-8", () => {
     expect(conflict.statusCode).toBe(409);
     const conflictPayload = protocolErrorResponseSchema.parse(conflict.json());
     expect(conflictPayload.error.code).toBe("IDEMPOTENCY_CONFLICT");
+  });
+
+  it("replays idempotent post_message after transient post-write failure without losing persisted message", async () => {
+    const threadStore = new FaultInjectingInMemoryThreadStore();
+    const app = createTestApp({
+      threadStore
+    });
+    appsToClose.push(app);
+
+    await app.inject({
+      method: "POST",
+      url: "/v1/mcp/create_thread",
+      headers: {
+        authorization: "Bearer coordinator_wk1"
+      },
+      payload: {
+        workspace_id: "wk_01",
+        title: "fault injection replay thread",
+        type: "workflow",
+        participants: ["participant_agent"]
+      }
+    });
+
+    threadStore.injectPostWriteFault();
+    const requestPayload = {
+      thread_id: "th_fixed-id",
+      schema_version: 1,
+      kind: "chat" as const,
+      body: "fault injection payload",
+      idempotency_key: "idem_fault_replay_01"
+    };
+
+    const firstAttempt = await app.inject({
+      method: "POST",
+      url: "/v1/mcp/post_message",
+      headers: {
+        authorization: "Bearer participant_wk1"
+      },
+      payload: requestPayload
+    });
+    expect(firstAttempt.statusCode).toBe(500);
+    const firstErrorPayload = protocolErrorResponseSchema.parse(firstAttempt.json());
+    expect(firstErrorPayload.error.code).toBe("INTERNAL");
+
+    const replayAttempt = await app.inject({
+      method: "POST",
+      url: "/v1/mcp/post_message",
+      headers: {
+        authorization: "Bearer participant_wk1"
+      },
+      payload: requestPayload
+    });
+    expect(replayAttempt.statusCode).toBe(200);
+    const replayPayload = postMessageOutputSchema.parse(replayAttempt.json());
+    expect(replayPayload.seq).toBe(1);
+
+    const readBack = await app.inject({
+      method: "POST",
+      url: "/v1/mcp/read_messages",
+      headers: {
+        authorization: "Bearer participant_wk1"
+      },
+      payload: {
+        thread_id: "th_fixed-id",
+        since_seq: 0,
+        limit: 10
+      }
+    });
+    expect(readBack.statusCode).toBe(200);
+    const readPayload = readMessagesOutputSchema.parse(readBack.json());
+    expect(readPayload.messages).toHaveLength(1);
+    expect(readPayload.messages[0]?.body).toBe("fault injection payload");
+    expect(readPayload.messages[0]?.seq).toBe(replayPayload.seq);
   });
 
   it("normalizes event_version defaults and rejects invalid event_version", async () => {
