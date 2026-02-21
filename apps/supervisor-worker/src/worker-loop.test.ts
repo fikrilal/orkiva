@@ -33,9 +33,14 @@ describe("supervisor worker loop", () => {
         candidates: 0,
         enqueued: 0,
         skippedPending: 0,
-        reusedExisting: 0
+        reusedExisting: 0,
+        suppressedByBudget: 0,
+        suppressedByBreaker: 0,
+        breakerOpen: false,
+        pendingJobs: 4
       })
     );
+    const countPendingJobs = vi.fn(() => Promise.resolve(4));
     const processDueJobs = vi.fn(() =>
       Promise.resolve({
         workspaceId: "wk_01",
@@ -59,6 +64,7 @@ describe("supervisor worker loop", () => {
       { reconcile: unreadReconcile },
       { schedule },
       { reconcileWorkspaceRuntimes: runtimeReconcile },
+      { countPendingJobs },
       { processDueJobs }
     );
 
@@ -75,6 +81,9 @@ describe("supervisor worker loop", () => {
       staleAfterHours: 12,
       polledAt: tickAt
     });
+    expect(countPendingJobs).toHaveBeenCalledWith({
+      workspaceId: "wk_01"
+    });
     expect(runtimeReconcile).toHaveBeenCalledWith({
       workspaceId: "wk_01",
       staleAfterHours: 12,
@@ -84,6 +93,7 @@ describe("supervisor worker loop", () => {
       workspaceId: "wk_01",
       candidates: [],
       triggerMaxRetries: 2,
+      pendingJobs: 4,
       scheduledAt: tickAt
     });
     expect(processDueJobs).toHaveBeenCalledWith({

@@ -215,6 +215,19 @@ Resume/spawn defaults (MVP):
 - stale session cutoff: `>12h` since last heartbeat
 - crash-loop shortcut: if `>=3` failures in `15m`, skip resume and spawn
 
+Unread auto-trigger containment defaults (MVP):
+- max auto-unread triggers per thread/participant in `5m`: `3`
+- minimum interval between auto-unread triggers for the same thread/participant: `30s`
+- backlog breaker threshold: `50` pending jobs
+- backlog breaker cooldown: `60s`
+
+Stale triggering reclaim defaults (MVP):
+- triggering lease timeout: `45s`
+- stale `triggering` jobs are reclaimed and resumed instead of staying stuck
+- reclaim continuation path:
+  - callback retry path when prior execution already succeeded
+  - executor retry path when execution result is unknown
+
 ## 8. Ack Detection Strategy
 Primary ack signals (priority order):
 1. `read_messages` cursor progressed by target `agent_id`.

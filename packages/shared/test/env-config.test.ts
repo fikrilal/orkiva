@@ -32,6 +32,12 @@ describe("runtime config contract", () => {
     expect(config.WORKER_MAX_PARALLEL_JOBS).toBe(10);
     expect(config.TRIGGER_QUIET_WINDOW_MS).toBe(20000);
     expect(config.TRIGGER_RATE_LIMIT_PER_MINUTE).toBe(10);
+    expect(config.AUTO_UNREAD_MAX_TRIGGERS_PER_WINDOW).toBe(3);
+    expect(config.AUTO_UNREAD_WINDOW_MS).toBe(300000);
+    expect(config.AUTO_UNREAD_MIN_INTERVAL_MS).toBe(30000);
+    expect(config.AUTO_UNREAD_BREAKER_BACKLOG_THRESHOLD).toBe(50);
+    expect(config.AUTO_UNREAD_BREAKER_COOLDOWN_MS).toBe(60000);
+    expect(config.TRIGGERING_LEASE_TIMEOUT_MS).toBe(45000);
   });
 
   it("fails fast when required env is missing", () => {

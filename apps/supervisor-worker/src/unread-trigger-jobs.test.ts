@@ -50,7 +50,13 @@ describe("unread trigger job scheduler", () => {
         updatedAt: scheduledAt
       }
     ]);
-    const scheduler = new UnreadTriggerJobScheduler(store);
+    const scheduler = new UnreadTriggerJobScheduler(store, {
+      maxTriggersPerWindow: 1000,
+      windowMs: 60_000,
+      minIntervalMs: 0,
+      breakerBacklogThreshold: 50,
+      breakerCooldownMs: 60_000
+    });
 
     const newCandidate = createCandidate({
       threadId: "th_02",
@@ -64,6 +70,7 @@ describe("unread trigger job scheduler", () => {
       workspaceId: "wk_01",
       candidates: [pendingCandidate, newCandidate],
       triggerMaxRetries: 2,
+      pendingJobs: 0,
       scheduledAt
     });
 
@@ -73,7 +80,11 @@ describe("unread trigger job scheduler", () => {
       candidates: 2,
       enqueued: 1,
       skippedPending: 1,
-      reusedExisting: 0
+      reusedExisting: 0,
+      suppressedByBudget: 0,
+      suppressedByBreaker: 0,
+      breakerOpen: false,
+      pendingJobs: 0
     });
 
     const newTriggerId = buildUnreadCandidateTriggerId({
@@ -118,12 +129,19 @@ describe("unread trigger job scheduler", () => {
         updatedAt: scheduledAt
       }
     ]);
-    const scheduler = new UnreadTriggerJobScheduler(store);
+    const scheduler = new UnreadTriggerJobScheduler(store, {
+      maxTriggersPerWindow: 1000,
+      windowMs: 60_000,
+      minIntervalMs: 0,
+      breakerBacklogThreshold: 50,
+      breakerCooldownMs: 60_000
+    });
 
     const result = await scheduler.schedule({
       workspaceId: "wk_01",
       candidates: [candidate],
       triggerMaxRetries: 2,
+      pendingJobs: 0,
       scheduledAt
     });
 
@@ -134,5 +152,96 @@ describe("unread trigger job scheduler", () => {
     const existing = await store.getJobById(existingTriggerId);
     expect(existing?.status).toBe("delivered");
     expect(existing?.attempts).toBe(1);
+  });
+
+  it("suppresses candidates by per-participant budget and min interval", async () => {
+    const candidate = createCandidate({
+      threadId: "th_budget",
+      participantAgentId: "reviewer_agent",
+      latestSeq: 30,
+      lastReadSeq: 29
+    });
+    const recentOne = new Date("2026-02-20T00:04:40.000Z");
+    const recentTwo = new Date("2026-02-20T00:04:50.000Z");
+    const store = new InMemoryTriggerQueueStore([
+      {
+        triggerId: "trg_budget_01",
+        threadId: candidate.threadId,
+        workspaceId: candidate.workspaceId,
+        targetAgentId: candidate.participantAgentId,
+        targetSessionId: candidate.sessionId ?? null,
+        reason: candidate.reason,
+        prompt: "prior auto trigger",
+        status: "callback_delivered",
+        attempts: 2,
+        maxRetries: 2,
+        nextRetryAt: null,
+        createdAt: recentOne,
+        updatedAt: recentOne
+      },
+      {
+        triggerId: "trg_budget_02",
+        threadId: candidate.threadId,
+        workspaceId: candidate.workspaceId,
+        targetAgentId: candidate.participantAgentId,
+        targetSessionId: candidate.sessionId ?? null,
+        reason: candidate.reason,
+        prompt: "prior auto trigger",
+        status: "callback_delivered",
+        attempts: 2,
+        maxRetries: 2,
+        nextRetryAt: null,
+        createdAt: recentTwo,
+        updatedAt: recentTwo
+      }
+    ]);
+    const scheduler = new UnreadTriggerJobScheduler(store, {
+      maxTriggersPerWindow: 2,
+      windowMs: 60_000,
+      minIntervalMs: 20_000,
+      breakerBacklogThreshold: 50,
+      breakerCooldownMs: 60_000
+    });
+
+    const result = await scheduler.schedule({
+      workspaceId: "wk_01",
+      candidates: [candidate],
+      triggerMaxRetries: 2,
+      pendingJobs: 0,
+      scheduledAt
+    });
+
+    expect(result.enqueued).toBe(0);
+    expect(result.suppressedByBudget).toBe(1);
+    expect(result.breakerOpen).toBe(false);
+  });
+
+  it("opens breaker when pending backlog exceeds threshold", async () => {
+    const candidate = createCandidate({
+      threadId: "th_breaker",
+      participantAgentId: "security_agent",
+      latestSeq: 20,
+      lastReadSeq: 19
+    });
+    const store = new InMemoryTriggerQueueStore();
+    const scheduler = new UnreadTriggerJobScheduler(store, {
+      maxTriggersPerWindow: 3,
+      windowMs: 60_000,
+      minIntervalMs: 10_000,
+      breakerBacklogThreshold: 1,
+      breakerCooldownMs: 60_000
+    });
+
+    const result = await scheduler.schedule({
+      workspaceId: "wk_01",
+      candidates: [candidate],
+      triggerMaxRetries: 2,
+      pendingJobs: 3,
+      scheduledAt
+    });
+
+    expect(result.enqueued).toBe(0);
+    expect(result.suppressedByBreaker).toBe(1);
+    expect(result.breakerOpen).toBe(true);
   });
 });

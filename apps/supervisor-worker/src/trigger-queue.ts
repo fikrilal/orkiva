@@ -1,7 +1,7 @@
 import type { DbClient } from "@orkiva/db";
 import { threads, triggerAttempts, triggerJobs } from "@orkiva/db";
 import { extractRequestIdFromTriggerId } from "@orkiva/protocol";
-import { and, asc, eq, inArray, isNull, lte, or } from "drizzle-orm";
+import { and, asc, eq, gte, inArray, isNull, lte, or } from "drizzle-orm";
 
 export type TriggerJobStatus =
   | "queued"
@@ -33,6 +33,11 @@ const CALLBACK_ATTEMPT_RESULTS: readonly TriggerAttemptResult[] = [
   "callback_post_succeeded",
   "callback_post_deferred",
   "callback_post_failed"
+];
+const EXECUTION_SUCCESS_ATTEMPT_RESULTS: readonly TriggerAttemptResult[] = [
+  "delivered",
+  "fallback_resume_succeeded",
+  "fallback_spawned"
 ];
 
 const isCallbackAttemptResult = (result: TriggerAttemptResult): boolean =>
@@ -143,6 +148,14 @@ const toTriggerJobRecord = (row: {
 
 export interface TriggerQueueStore {
   listPendingJobs(input: ListPendingTriggerJobsInput): Promise<readonly TriggerJobRecord[]>;
+  listRecentAutoTriggerJobs(input: {
+    workspaceId: string;
+    reason: string;
+    threadIds: readonly string[];
+    targetAgentIds: readonly string[];
+    since: Date;
+  }): Promise<readonly TriggerJobRecord[]>;
+  countPendingJobs(input: { workspaceId: string }): Promise<number>;
   createOrReuseTriggerJob(
     input: CreateOrReuseTriggerJobInput
   ): Promise<CreateOrReuseTriggerJobResult>;
@@ -150,6 +163,7 @@ export interface TriggerQueueStore {
     workspaceId: string;
     limit: number;
     claimedAt: Date;
+    triggeringLeaseTimeoutMs: number;
   }): Promise<readonly TriggerJobRecord[]>;
   recordAttemptAndTransition(input: {
     triggerId: string;
@@ -183,7 +197,11 @@ const toTransitionStatusForRetry = (attemptResult: TriggerAttemptResult): Trigge
   return "failed";
 };
 
-const isClaimEligible = (job: TriggerJobRecord, claimedAt: Date): boolean => {
+const isClaimEligible = (
+  job: TriggerJobRecord,
+  claimedAt: Date,
+  triggeringLeaseTimeoutMs: number
+): boolean => {
   const dueByRetryWindow =
     job.nextRetryAt === null || job.nextRetryAt.getTime() <= claimedAt.getTime();
   if (!dueByRetryWindow) {
@@ -200,6 +218,9 @@ const isClaimEligible = (job: TriggerJobRecord, claimedAt: Date): boolean => {
 
   if (CALLBACK_DUE_TRIGGER_STATUSES.includes(job.status)) {
     return true;
+  }
+  if (job.status === "triggering") {
+    return job.updatedAt.getTime() <= claimedAt.getTime() - triggeringLeaseTimeoutMs;
   }
 
   return false;
@@ -376,6 +397,7 @@ export class TriggerQueueProcessor {
     private readonly backoffMaxMs = 60000,
     private readonly logger?: TriggerQueueLogger,
     private readonly executionTimeoutMs = 8000,
+    private readonly triggeringLeaseTimeoutMs = 45000,
     private readonly callbackMaxRetries = 3,
     private readonly callbackExecutor: TriggerCallbackExecutor = new NoopTriggerCallbackExecutor()
   ) {}
@@ -605,6 +627,26 @@ export class TriggerQueueProcessor {
     };
   }
 
+  private shouldResumeFromCallbackStage(input: {
+    job: TriggerJobRecord;
+    latestExecutionAttempt: TriggerAttemptRecord | null;
+  }): boolean {
+    if (input.job.status !== "triggering") {
+      return false;
+    }
+    if (input.job.attempts <= 0) {
+      return false;
+    }
+    if (input.latestExecutionAttempt === null) {
+      return false;
+    }
+    if (input.latestExecutionAttempt.attemptNo !== input.job.attempts) {
+      return false;
+    }
+
+    return EXECUTION_SUCCESS_ATTEMPT_RESULTS.includes(input.latestExecutionAttempt.attemptResult);
+  }
+
   public async processDueJobs(input: {
     workspaceId: string;
     limit: number;
@@ -614,7 +656,8 @@ export class TriggerQueueProcessor {
     const claimedJobs = await this.store.claimDueJobs({
       workspaceId: input.workspaceId,
       limit: input.limit,
-      claimedAt: processedAt
+      claimedAt: processedAt,
+      triggeringLeaseTimeoutMs: this.triggeringLeaseTimeoutMs
     });
 
     let delivered = 0;
@@ -642,9 +685,25 @@ export class TriggerQueueProcessor {
         ...correlationContext,
         attempt_no: attemptNo
       });
-      if (job.status === "callback_pending" || job.status === "callback_retry") {
+      const latestExecutionAttempt = await this.store.getLatestTriggerExecutionAttempt(job.triggerId);
+      const recoveredFromStaleTriggering = this.shouldResumeFromCallbackStage({
+        job,
+        latestExecutionAttempt
+      });
+      const effectiveStatus: TriggerJobStatus = recoveredFromStaleTriggering
+        ? "callback_retry"
+        : job.status === "triggering"
+          ? "timeout"
+          : job.status;
+      if (job.status === "triggering") {
+        this.logger?.info("trigger.job.reclaimed", {
+          ...correlationContext,
+          attempt_no: attemptNo,
+          recovered_status: effectiveStatus
+        });
+      }
+      if (effectiveStatus === "callback_pending" || effectiveStatus === "callback_retry") {
         const callbackAttempts = await this.store.getCallbackAttemptCount(job.triggerId);
-        const triggerOutcome = await this.store.getLatestTriggerExecutionAttempt(job.triggerId);
         const callbackAttemptNo = callbackAttempts + 1;
         const callbackOutcome = await this.runWithTimeout<TriggerCallbackOutcome>({
           phase: "callback",
@@ -654,7 +713,7 @@ export class TriggerQueueProcessor {
             this.callbackExecutor.execute({
               job,
               attemptNo: callbackAttemptNo,
-              triggerOutcome,
+              triggerOutcome: latestExecutionAttempt,
               now: processedAt
             }),
           onTimeout: () =>
@@ -735,12 +794,12 @@ export class TriggerQueueProcessor {
       }
 
       const requiresDirectFallback =
-        job.status === "fallback_resume" || job.status === "fallback_spawn";
+        effectiveStatus === "fallback_resume" || effectiveStatus === "fallback_spawn";
       const rateLimitedOutcome = this.applyRateLimit(job, processedAt);
       const outcome =
         requiresDirectFallback
           ? toDirectFallbackRequiredOutcome(
-              job.status === "fallback_resume" ? "fallback_resume" : "fallback_spawn"
+              effectiveStatus === "fallback_resume" ? "fallback_resume" : "fallback_spawn"
             )
           : rateLimitedOutcome ??
             (await this.runWithTimeout({
@@ -973,6 +1032,46 @@ export class InMemoryTriggerQueueStore implements TriggerQueueStore {
     );
   }
 
+  public listRecentAutoTriggerJobs(input: {
+    workspaceId: string;
+    reason: string;
+    threadIds: readonly string[];
+    targetAgentIds: readonly string[];
+    since: Date;
+  }): Promise<readonly TriggerJobRecord[]> {
+    const threadIds = new Set(input.threadIds);
+    const targetAgentIds = new Set(input.targetAgentIds);
+    return Promise.resolve(
+      [...this.jobs.values()].filter((job) => {
+        if (job.workspaceId !== input.workspaceId) {
+          return false;
+        }
+        if (job.reason !== input.reason) {
+          return false;
+        }
+        if (!threadIds.has(job.threadId)) {
+          return false;
+        }
+        if (!targetAgentIds.has(job.targetAgentId)) {
+          return false;
+        }
+        if (job.updatedAt.getTime() < input.since.getTime()) {
+          return false;
+        }
+        return true;
+      })
+    );
+  }
+
+  public countPendingJobs(input: { workspaceId: string }): Promise<number> {
+    return Promise.resolve(
+      [...this.jobs.values()].filter(
+        (job) =>
+          job.workspaceId === input.workspaceId && PENDING_TRIGGER_JOB_STATUSES.includes(job.status)
+      ).length
+    );
+  }
+
   public createOrReuseTriggerJob(
     input: CreateOrReuseTriggerJobInput
   ): Promise<CreateOrReuseTriggerJobResult> {
@@ -996,10 +1095,11 @@ export class InMemoryTriggerQueueStore implements TriggerQueueStore {
     workspaceId: string;
     limit: number;
     claimedAt: Date;
+    triggeringLeaseTimeoutMs: number;
   }): Promise<readonly TriggerJobRecord[]> {
     const due = [...this.jobs.values()]
       .filter((job) => job.workspaceId === input.workspaceId)
-      .filter((job) => isClaimEligible(job, input.claimedAt))
+      .filter((job) => isClaimEligible(job, input.claimedAt, input.triggeringLeaseTimeoutMs))
       .sort((left, right) => left.createdAt.getTime() - right.createdAt.getTime())
       .slice(0, input.limit);
 
@@ -1151,6 +1251,43 @@ export class DbTriggerQueueStore implements TriggerQueueStore {
     return rows.map((row) => toTriggerJobRecord(row));
   }
 
+  public async listRecentAutoTriggerJobs(input: {
+    workspaceId: string;
+    reason: string;
+    threadIds: readonly string[];
+    targetAgentIds: readonly string[];
+    since: Date;
+  }): Promise<readonly TriggerJobRecord[]> {
+    if (input.threadIds.length === 0 || input.targetAgentIds.length === 0) {
+      return [];
+    }
+
+    const rows = await this.db.query.triggerJobs.findMany({
+      where: (table) =>
+        and(
+          eq(table.workspaceId, input.workspaceId),
+          eq(table.reason, input.reason),
+          inArray(table.threadId, [...input.threadIds]),
+          inArray(table.targetAgentId, [...input.targetAgentIds]),
+          gte(table.updatedAt, input.since)
+        ),
+      orderBy: (table, operators) => [operators.desc(table.updatedAt)],
+      limit: 500
+    });
+    return rows.map((row) => toTriggerJobRecord(row));
+  }
+
+  public async countPendingJobs(input: { workspaceId: string }): Promise<number> {
+    const rows = await this.db.query.triggerJobs.findMany({
+      where: (table) =>
+        and(eq(table.workspaceId, input.workspaceId), inArray(table.status, [...PENDING_TRIGGER_JOB_STATUSES])),
+      columns: {
+        triggerId: true
+      }
+    });
+    return rows.length;
+  }
+
   public async createOrReuseTriggerJob(
     input: CreateOrReuseTriggerJobInput
   ): Promise<CreateOrReuseTriggerJobResult> {
@@ -1211,7 +1348,9 @@ export class DbTriggerQueueStore implements TriggerQueueStore {
     workspaceId: string;
     limit: number;
     claimedAt: Date;
+    triggeringLeaseTimeoutMs: number;
   }): Promise<readonly TriggerJobRecord[]> {
+    const reclaimBefore = new Date(input.claimedAt.getTime() - input.triggeringLeaseTimeoutMs);
     const candidates = await this.db.query.triggerJobs.findMany({
       where: (table) =>
         and(
@@ -1222,7 +1361,8 @@ export class DbTriggerQueueStore implements TriggerQueueStore {
               inArray(table.status, [...INITIAL_FALLBACK_DUE_TRIGGER_STATUSES]),
               eq(table.attempts, 0)
             ),
-            inArray(table.status, [...CALLBACK_DUE_TRIGGER_STATUSES])
+            inArray(table.status, [...CALLBACK_DUE_TRIGGER_STATUSES]),
+            and(eq(table.status, "triggering"), lte(table.updatedAt, reclaimBefore))
           ),
           or(isNull(table.nextRetryAt), lte(table.nextRetryAt, input.claimedAt))
         ),

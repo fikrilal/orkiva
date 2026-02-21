@@ -214,6 +214,19 @@ Human-input collision defaults (MVP):
 - after max defer, fallback to `resume` path and emit collision event
 - `force_override=true` allowed only for explicit operator intent
 
+Auto-unread storm containment defaults (MVP):
+- per-thread/per-participant budget: max `3` auto-unread triggers per `5m`
+- minimum interval between auto-unread triggers for the same thread/participant: `30s`
+- backlog breaker opens when pending trigger jobs reach `50`
+- breaker cooldown: `60s` before auto-unread enqueue resumes
+
+Stale-trigger reclaim defaults (MVP):
+- `triggering` jobs are considered stale after `45s` lease timeout
+- stale jobs are reclaimed on the next queue claim cycle
+- reclaim routing:
+  - if latest execution attempt indicates success, continue at callback stage (`callback_retry`)
+  - otherwise continue at executor retry stage (`timeout`)
+
 ## 13. Human Visibility Model
 Recommended operation mode:
 - One tmux session per workspace.
@@ -258,6 +271,17 @@ Implementation notes for MVP:
 - Runtime worker enforces a default per-thread/per-agent limiter of `10` trigger attempts per minute.
 - Rate-limited triggers are deferred with deterministic `TRIGGER_RATE_LIMITED` classification.
 - Loop guard threshold trips emit deterministic `THREAD_AUTO_BLOCKED` classification.
+- Auto-unread scheduler suppression is observable and tick logs include `suppressedByBudget`, `suppressedByBreaker`, `breakerOpen`, and `pendingJobs`.
+- Unread auto-trigger scheduler applies a per-thread/per-participant budget:
+  - max auto triggers per `5m`: `3`
+  - minimum spacing between auto triggers: `30s`
+- Unread auto-trigger scheduler applies a queue backlog breaker:
+  - open breaker when pending trigger backlog `>=50`
+  - suppress new unread auto-trigger enqueue while breaker is open
+  - breaker cooldown window: `60s`
+- Trigger queue reclaims stale `triggering` jobs using a lease timeout (`45s` default):
+  - if last persisted attempt result indicates execution succeeded, continue at `callback_retry`
+  - otherwise continue at execution retry path (`timeout` classification) to avoid stuck jobs
 
 ## 15. Security and Access
 - Only orchestrator service can call supervisor trigger APIs.

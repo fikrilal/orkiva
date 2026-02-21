@@ -67,13 +67,21 @@ try {
     60000,
     logger,
     config.TRIGGER_ACK_TIMEOUT_MS,
+    config.TRIGGERING_LEASE_TIMEOUT_MS,
     config.WORKER_CALLBACK_MAX_RETRIES,
     callbackExecutor
   );
   const workerLoop = new SupervisorWorkerLoop(
     reconciliationService,
-    new UnreadTriggerJobScheduler(triggerQueueStore),
+    new UnreadTriggerJobScheduler(triggerQueueStore, {
+      maxTriggersPerWindow: config.AUTO_UNREAD_MAX_TRIGGERS_PER_WINDOW,
+      windowMs: config.AUTO_UNREAD_WINDOW_MS,
+      minIntervalMs: config.AUTO_UNREAD_MIN_INTERVAL_MS,
+      breakerBacklogThreshold: config.AUTO_UNREAD_BREAKER_BACKLOG_THRESHOLD,
+      breakerCooldownMs: config.AUTO_UNREAD_BREAKER_COOLDOWN_MS
+    }),
     runtimeRegistryService,
+    triggerQueueStore,
     triggerQueueProcessor
   );
 
@@ -99,6 +107,10 @@ try {
         unread_triggers_enqueued: unreadTriggerScheduling.enqueued,
         unread_triggers_skipped_pending: unreadTriggerScheduling.skippedPending,
         unread_triggers_reused_existing: unreadTriggerScheduling.reusedExisting,
+        unread_triggers_suppressed_budget: unreadTriggerScheduling.suppressedByBudget,
+        unread_triggers_suppressed_breaker: unreadTriggerScheduling.suppressedByBreaker,
+        unread_trigger_breaker_open: unreadTriggerScheduling.breakerOpen,
+        pending_jobs: unreadTriggerScheduling.pendingJobs,
         participants_scanned: unreadResult.stats.participantsScanned,
         deduplicated_participants: unreadResult.stats.deduplicatedParticipants,
         runtimes_checked: runtimeResult.checkedRuntimes,
@@ -118,6 +130,8 @@ try {
       logger.info("tick.idle", {
         participants_scanned: unreadResult.stats.participantsScanned,
         unread_triggers_enqueued: unreadTriggerScheduling.enqueued,
+        unread_trigger_breaker_open: unreadTriggerScheduling.breakerOpen,
+        pending_jobs: unreadTriggerScheduling.pendingJobs,
         runtimes_checked: runtimeResult.checkedRuntimes,
         jobs_claimed: queueResult.claimedJobs
       });

@@ -3,7 +3,7 @@ import type {
   UnreadReconciliationService
 } from "./unread-reconciliation.js";
 import type { ReconcileRuntimeResult, RuntimeRegistryService } from "./runtime-registry.js";
-import type { TriggerQueueProcessingResult } from "./trigger-queue.js";
+import type { TriggerQueueProcessingResult, TriggerQueueStore } from "./trigger-queue.js";
 import type {
   ScheduleUnreadCandidatesResult,
   UnreadTriggerJobScheduler
@@ -32,6 +32,7 @@ export class SupervisorWorkerLoop {
       RuntimeRegistryService,
       "reconcileWorkspaceRuntimes"
     >,
+    private readonly triggerQueueBacklogStore: Pick<TriggerQueueStore, "countPendingJobs">,
     private readonly triggerQueueProcessor: {
       processDueJobs: (input: {
         workspaceId: string;
@@ -48,10 +49,14 @@ export class SupervisorWorkerLoop {
       staleAfterHours: input.staleAfterHours,
       polledAt: tickAt
     });
+    const pendingJobs = await this.triggerQueueBacklogStore.countPendingJobs({
+      workspaceId: input.workspaceId
+    });
     const unreadTriggerScheduling = await this.unreadTriggerJobScheduler.schedule({
       workspaceId: input.workspaceId,
       candidates: unreadReconciliation.candidates,
       triggerMaxRetries: input.triggerMaxRetries,
+      pendingJobs,
       scheduledAt: tickAt
     });
     const runtimeReconciliation = await this.runtimeRegistryService.reconcileWorkspaceRuntimes({

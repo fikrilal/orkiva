@@ -129,9 +129,14 @@ Default hybrid policy (MVP):
 - supervisor polling interval: 5s
 - trigger ack timeout: 8s
 - trigger retries before fallback: 2
+- triggering lease timeout before stale reclaim: 45s
 - human-input quiet window before trigger injection: 20s
 - deferred trigger re-check interval: 5s
 - max defer window before fallback: 60s
+- auto-unread max triggers per thread/participant per 5m: 3
+- auto-unread minimum interval per thread/participant: 30s
+- auto-unread backlog breaker threshold (pending jobs): 50
+- auto-unread backlog breaker cooldown: 60s
 - no-progress auto-block threshold: 20 turns
 - repeated-identical-finding auto-block threshold: 3 cycles
 - resume attempts before spawn: 2
@@ -152,6 +157,8 @@ Default hybrid policy (MVP):
 - dormant participant wake and resume behavior
 - unmanaged-target fallback behavior
 - human-input collision defer/override behavior
+- stale `triggering` reclaim path behavior (executor-stage and callback-stage continuation)
+- auto-unread storm containment behavior (budget suppression and backlog breaker cooldown)
 - cross-workspace request rejection in MVP mode
 - backward-compatible payload handling by `schema_version`
 

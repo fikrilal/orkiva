@@ -219,14 +219,13 @@ describe("trigger queue processing", () => {
         maxRetries: 2
       })
     ]);
-    const executor: TriggerJobExecutor = {
-      execute: vi.fn(() =>
-        Promise.resolve({
-          attemptResult: "delivered",
-          retryable: false
-        } satisfies TriggerExecutionOutcome)
-      )
-    };
+    const execute = vi.fn(() =>
+      Promise.resolve({
+        attemptResult: "delivered",
+        retryable: false
+      } satisfies TriggerExecutionOutcome)
+    );
+    const executor: TriggerJobExecutor = { execute };
     const processor = new TriggerQueueProcessor(
       store,
       executor,
@@ -550,6 +549,7 @@ describe("trigger queue processing", () => {
       60000,
       undefined,
       8000,
+      45000,
       3,
       callbackExecutor
     );
@@ -563,6 +563,120 @@ describe("trigger queue processing", () => {
     expect(result.callbackDelivered).toBe(1);
     const final = await store.getJobById(job.triggerId);
     expect(final?.status).toBe("callback_delivered");
+  });
+
+  it("reclaims stale triggering jobs into callback retry path when execution already succeeded", async () => {
+    const reclaimedAt = new Date("2026-02-18T10:05:00.000Z");
+    const triggerId = "trg_reclaim_callback_01";
+    const store = new InMemoryTriggerQueueStore([
+      {
+        ...queuedJob({
+          triggerId,
+          maxRetries: 2,
+          status: "queued",
+          attempts: 0
+        }),
+        status: "triggering",
+        attempts: 1,
+        updatedAt: new Date("2026-02-18T10:00:00.000Z")
+      }
+    ]);
+    (
+      store as unknown as {
+        attemptsByTrigger: Map<string, Array<Record<string, unknown>>>;
+      }
+    ).attemptsByTrigger.set(triggerId, [
+      {
+        attemptNo: 1,
+        attemptResult: "delivered",
+        createdAt: new Date("2026-02-18T10:00:00.000Z")
+      }
+    ]);
+
+    const execute = vi.fn(() =>
+      Promise.resolve({
+        attemptResult: "delivered",
+        retryable: false
+      } satisfies TriggerExecutionOutcome)
+    );
+    const executor: TriggerJobExecutor = { execute };
+    const executeCallback = vi.fn(() =>
+      Promise.resolve({
+        attemptResult: "callback_post_succeeded",
+        retryable: false
+      } as const)
+    );
+    const callbackExecutor = { execute: executeCallback };
+    const processor = new TriggerQueueProcessor(
+      store,
+      executor,
+      new NoopTriggerFallbackExecutor(),
+      {
+        deferRecheckMs: 5000,
+        rateLimitPerMinute: 10,
+        loopMaxTurns: 20,
+        loopMaxRepeatedFindings: 3
+      },
+      2000,
+      60000,
+      undefined,
+      8000,
+      45000,
+      3,
+      callbackExecutor
+    );
+
+    const result = await processor.processDueJobs({
+      workspaceId: "wk_01",
+      limit: 10,
+      processedAt: reclaimedAt
+    });
+
+    expect(result.callbackDelivered).toBe(1);
+    expect(execute).toHaveBeenCalledTimes(0);
+    expect(executeCallback).toHaveBeenCalledTimes(1);
+    const final = await store.getJobById(triggerId);
+    expect(final?.status).toBe("callback_delivered");
+  });
+
+  it("reclaims stale triggering jobs into executor retry path when execution phase is unknown", async () => {
+    const triggerId = "trg_reclaim_executor_01";
+    const store = new InMemoryTriggerQueueStore([
+      {
+        ...queuedJob({
+          triggerId,
+          maxRetries: 2
+        }),
+        status: "triggering",
+        attempts: 0,
+        updatedAt: new Date("2026-02-18T10:00:00.000Z")
+      }
+    ]);
+    const execute = vi.fn(() =>
+      Promise.resolve({
+        attemptResult: "delivered",
+        retryable: false
+      } satisfies TriggerExecutionOutcome)
+    );
+    const executor: TriggerJobExecutor = { execute };
+    const processor = new TriggerQueueProcessor(store, executor, new NoopTriggerFallbackExecutor(), {
+      deferRecheckMs: 5000,
+      rateLimitPerMinute: 10,
+      loopMaxTurns: 20,
+      loopMaxRepeatedFindings: 3
+    });
+
+    const result = await processor.processDueJobs({
+      workspaceId: "wk_01",
+      limit: 10,
+      processedAt: new Date("2026-02-18T10:05:00.000Z")
+    });
+
+    expect(result.delivered).toBe(1);
+    expect(execute).toHaveBeenCalledTimes(1);
+    const final = await store.getJobById(triggerId);
+    expect(final?.status).toBe("callback_pending");
+    expect(final?.attempts).toBe(1);
   });
 
   it("records deterministic failure when executor throws", async () => {

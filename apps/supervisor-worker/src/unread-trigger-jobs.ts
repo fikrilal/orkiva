@@ -54,15 +54,39 @@ const resolveInitialJobStatus = (
 
 export interface UnreadTriggerJobStore {
   listPendingJobs(input: ListPendingTriggerJobsInput): Promise<readonly TriggerJobRecord[]>;
+  listRecentAutoTriggerJobs(input: {
+    workspaceId: string;
+    reason: string;
+    threadIds: readonly string[];
+    targetAgentIds: readonly string[];
+    since: Date;
+  }): Promise<readonly TriggerJobRecord[]>;
   createOrReuseTriggerJob(
     input: CreateOrReuseTriggerJobInput
   ): Promise<CreateOrReuseTriggerJobResult>;
 }
 
+export interface UnreadSchedulerGuardConfig {
+  maxTriggersPerWindow: number;
+  windowMs: number;
+  minIntervalMs: number;
+  breakerBacklogThreshold: number;
+  breakerCooldownMs: number;
+}
+
+const DEFAULT_UNREAD_SCHEDULER_GUARDS: UnreadSchedulerGuardConfig = {
+  maxTriggersPerWindow: 3,
+  windowMs: 5 * 60 * 1000,
+  minIntervalMs: 30 * 1000,
+  breakerBacklogThreshold: 50,
+  breakerCooldownMs: 60 * 1000
+};
+
 export interface ScheduleUnreadCandidatesInput {
   workspaceId: string;
   candidates: readonly UnreadReconciliationCandidate[];
   triggerMaxRetries: number;
+  pendingJobs: number;
   scheduledAt?: Date;
 }
 
@@ -73,13 +97,35 @@ export interface ScheduleUnreadCandidatesResult {
   enqueued: number;
   skippedPending: number;
   reusedExisting: number;
+  suppressedByBudget: number;
+  suppressedByBreaker: number;
+  breakerOpen: boolean;
+  pendingJobs: number;
 }
 
 export class UnreadTriggerJobScheduler {
-  public constructor(private readonly store: UnreadTriggerJobStore) {}
+  private breakerOpenUntil: Date | null = null;
+
+  public constructor(
+    private readonly store: UnreadTriggerJobStore,
+    private readonly guardConfig: UnreadSchedulerGuardConfig = DEFAULT_UNREAD_SCHEDULER_GUARDS
+  ) {}
+
+  private isBreakerOpen(at: Date): boolean {
+    return this.breakerOpenUntil !== null && this.breakerOpenUntil.getTime() > at.getTime();
+  }
 
   public async schedule(input: ScheduleUnreadCandidatesInput): Promise<ScheduleUnreadCandidatesResult> {
     const scheduledAt = input.scheduledAt ?? new Date();
+    const pendingJobCount = input.pendingJobs;
+    const breakerWasOpen = this.isBreakerOpen(scheduledAt);
+    if (
+      !breakerWasOpen &&
+      pendingJobCount >= this.guardConfig.breakerBacklogThreshold
+    ) {
+      this.breakerOpenUntil = new Date(scheduledAt.getTime() + this.guardConfig.breakerCooldownMs);
+    }
+    const breakerOpen = this.isBreakerOpen(scheduledAt);
     if (input.candidates.length === 0) {
       return {
         workspaceId: input.workspaceId,
@@ -87,7 +133,25 @@ export class UnreadTriggerJobScheduler {
         candidates: 0,
         enqueued: 0,
         skippedPending: 0,
-        reusedExisting: 0
+        reusedExisting: 0,
+        suppressedByBudget: 0,
+        suppressedByBreaker: 0,
+        breakerOpen,
+        pendingJobs: pendingJobCount
+      };
+    }
+    if (breakerOpen) {
+      return {
+        workspaceId: input.workspaceId,
+        scheduledAt,
+        candidates: input.candidates.length,
+        enqueued: 0,
+        skippedPending: 0,
+        reusedExisting: 0,
+        suppressedByBudget: 0,
+        suppressedByBreaker: input.candidates.length,
+        breakerOpen,
+        pendingJobs: pendingJobCount
       };
     }
 
@@ -95,24 +159,59 @@ export class UnreadTriggerJobScheduler {
     const targetAgentIds = [
       ...new Set(input.candidates.map((candidate) => candidate.participantAgentId))
     ];
-    const pendingJobs = await this.store.listPendingJobs({
+    const existingPendingJobs = await this.store.listPendingJobs({
       workspaceId: input.workspaceId,
       reason: "new_unread_dormant_participant",
       threadIds,
       targetAgentIds
     });
     const pendingKeys = new Set(
-      pendingJobs.map((job) => unreadCandidateKey(job.threadId, job.targetAgentId))
+      existingPendingJobs.map((job) => unreadCandidateKey(job.threadId, job.targetAgentId))
     );
+    const recentJobs = await this.store.listRecentAutoTriggerJobs({
+      workspaceId: input.workspaceId,
+      reason: "new_unread_dormant_participant",
+      threadIds,
+      targetAgentIds,
+      since: new Date(scheduledAt.getTime() - this.guardConfig.windowMs)
+    });
+    const recentActivityByParticipant = new Map<string, Date[]>();
+    for (const job of recentJobs) {
+      const key = unreadCandidateKey(job.threadId, job.targetAgentId);
+      const existing = recentActivityByParticipant.get(key) ?? [];
+      existing.push(job.updatedAt);
+      recentActivityByParticipant.set(key, existing);
+    }
+    for (const [key, timestamps] of recentActivityByParticipant.entries()) {
+      timestamps.sort((left, right) => right.getTime() - left.getTime());
+      recentActivityByParticipant.set(key, timestamps);
+    }
 
     let enqueued = 0;
     let skippedPending = 0;
     let reusedExisting = 0;
+    let suppressedByBudget = 0;
 
     for (const candidate of input.candidates) {
       const participantKey = unreadCandidateKey(candidate.threadId, candidate.participantAgentId);
       if (pendingKeys.has(participantKey)) {
         skippedPending += 1;
+        continue;
+      }
+      const recentActivity = recentActivityByParticipant.get(participantKey) ?? [];
+      const latestActivity = recentActivity[0];
+      if (
+        latestActivity !== undefined &&
+        scheduledAt.getTime() - latestActivity.getTime() < this.guardConfig.minIntervalMs
+      ) {
+        suppressedByBudget += 1;
+        continue;
+      }
+      const recentCountInWindow = recentActivity.filter(
+        (eventAt) => scheduledAt.getTime() - eventAt.getTime() <= this.guardConfig.windowMs
+      ).length;
+      if (recentCountInWindow >= this.guardConfig.maxTriggersPerWindow) {
+        suppressedByBudget += 1;
         continue;
       }
 
@@ -139,6 +238,7 @@ export class UnreadTriggerJobScheduler {
       if (result.created) {
         enqueued += 1;
         pendingKeys.add(participantKey);
+        recentActivityByParticipant.set(participantKey, [scheduledAt, ...recentActivity]);
       } else {
         reusedExisting += 1;
       }
@@ -150,7 +250,11 @@ export class UnreadTriggerJobScheduler {
       candidates: input.candidates.length,
       enqueued,
       skippedPending,
-      reusedExisting
+      reusedExisting,
+      suppressedByBudget,
+      suppressedByBreaker: 0,
+      breakerOpen: false,
+      pendingJobs: pendingJobCount
     };
   }
 }
