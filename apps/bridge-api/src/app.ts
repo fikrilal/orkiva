@@ -73,6 +73,7 @@ declare module "fastify" {
 }
 
 export interface BridgeApiAppDependencies {
+  workspaceId: string;
   threadStore: ThreadStore;
   sessionStore: SessionStore;
   triggerStore: TriggerStore;
@@ -434,6 +435,28 @@ const threadRecordToProtocol = (record: {
     updated_at: toIso(record.updatedAt)
   });
 
+const assertThreadParticipantAccess = (
+  thread: {
+    threadId: string;
+    participants: readonly string[];
+  },
+  authClaims: VerifiedAuthClaims
+): void => {
+  if (authClaims.role !== "participant") {
+    return;
+  }
+
+  if (isThreadParticipant(thread, authClaims.agentId)) {
+    return;
+  }
+
+  throw new BridgeApiError("FORBIDDEN", 403, "Agent is not a participant in the thread", {
+    thread_id: thread.threadId,
+    agent_id: authClaims.agentId,
+    role: authClaims.role
+  });
+};
+
 export const createBridgeApiApp = (dependencies: BridgeApiAppDependencies): FastifyInstance => {
   const now = dependencies.now ?? (() => new Date());
   const idGenerator = dependencies.idGenerator ?? randomUUID;
@@ -482,6 +505,7 @@ export const createBridgeApiApp = (dependencies: BridgeApiAppDependencies): Fast
 
     const token = parseBearerToken(request.headers.authorization);
     const claims = await dependencies.verifyAccessToken(token);
+    assertWorkspaceBoundary(claims, dependencies.workspaceId);
     request.context = {
       requestId: request.id,
       authClaims: claims
@@ -640,6 +664,7 @@ export const createBridgeApiApp = (dependencies: BridgeApiAppDependencies): Fast
       }
 
       assertWorkspaceBoundary(authClaims, existing.workspaceId);
+      assertThreadParticipantAccess(existing, authClaims);
       return threadRecordToProtocol(existing);
     },
     update_thread_status: async (payload, request) => {
@@ -741,6 +766,7 @@ export const createBridgeApiApp = (dependencies: BridgeApiAppDependencies): Fast
       }
 
       assertWorkspaceBoundary(authClaims, existing.workspaceId);
+      assertThreadParticipantAccess(existing, authClaims);
       const summary = await dependencies.threadStore.summarizeThread(
         input.thread_id,
         input.max_messages
@@ -920,6 +946,7 @@ export const createBridgeApiApp = (dependencies: BridgeApiAppDependencies): Fast
       }
 
       assertWorkspaceBoundary(authClaims, existingThread.workspaceId);
+      assertThreadParticipantAccess(existingThread, authClaims);
 
       if (input.in_reply_to !== undefined) {
         const parentMessage = await dependencies.threadStore.getMessageById(
@@ -1055,6 +1082,7 @@ export const createBridgeApiApp = (dependencies: BridgeApiAppDependencies): Fast
       }
 
       assertWorkspaceBoundary(authClaims, existingThread.workspaceId);
+      assertThreadParticipantAccess(existingThread, authClaims);
       const page = await dependencies.threadStore.readMessages(
         input.thread_id,
         input.since_seq,
@@ -1094,6 +1122,7 @@ export const createBridgeApiApp = (dependencies: BridgeApiAppDependencies): Fast
       }
 
       assertWorkspaceBoundary(authClaims, existingThread.workspaceId);
+      assertThreadParticipantAccess(existingThread, authClaims);
       const latestSeq = await dependencies.threadStore.getLatestMessageSeq(input.thread_id);
       if (input.last_read_seq > latestSeq) {
         throw new BridgeApiError(

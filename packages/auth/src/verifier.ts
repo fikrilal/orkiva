@@ -1,4 +1,10 @@
-import { createRemoteJWKSet, jwtVerify, type JWTVerifyGetKey } from "jose";
+import {
+  createLocalJWKSet,
+  createRemoteJWKSet,
+  jwtVerify,
+  type JSONWebKeySet,
+  type JWTVerifyGetKey
+} from "jose";
 
 import { mapVerifiedClaims, type VerifiedAuthClaims } from "./claims.js";
 import { AuthError } from "./errors.js";
@@ -18,6 +24,7 @@ export interface AccessTokenVerifierOptions {
   issuer: string;
   audience: string;
   jwksUrl?: string;
+  jwksJson?: string;
   keyResolver?: JWTVerifyGetKey;
   clockToleranceSeconds?: number;
 }
@@ -44,9 +51,39 @@ const resolveVerifierOptions = (options: AccessTokenVerifierOptions): ResolvedVe
     };
   }
 
+  const jwksJson = options.jwksJson ? requireNonEmptyString(options.jwksJson, "jwksJson") : undefined;
+  if (jwksJson) {
+    let parsedJwks: unknown;
+    try {
+      parsedJwks = JSON.parse(jwksJson);
+    } catch (error) {
+      throw new AuthError("INVALID_ARGUMENT", '"jwksJson" must be valid JSON', {
+        reason: error instanceof Error ? error.message : String(error)
+      });
+    }
+
+    if (
+      typeof parsedJwks !== "object" ||
+      parsedJwks === null ||
+      !("keys" in parsedJwks) ||
+      !Array.isArray((parsedJwks as { keys?: unknown }).keys)
+    ) {
+      throw new AuthError("INVALID_ARGUMENT", '"jwksJson" must contain a "keys" array');
+    }
+
+    return {
+      issuer,
+      audience,
+      keyResolver: createLocalJWKSet(parsedJwks as JSONWebKeySet),
+      ...(options.clockToleranceSeconds === undefined
+        ? {}
+        : { clockToleranceSeconds: options.clockToleranceSeconds })
+    };
+  }
+
   const jwksUrl = options.jwksUrl ? requireNonEmptyString(options.jwksUrl, "jwksUrl") : undefined;
   if (!jwksUrl) {
-    throw new AuthError("INVALID_ARGUMENT", "Either keyResolver or jwksUrl must be provided");
+    throw new AuthError("INVALID_ARGUMENT", "Either keyResolver, jwksJson, or jwksUrl must be provided");
   }
 
   return {

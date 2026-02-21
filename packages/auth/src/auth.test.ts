@@ -16,6 +16,7 @@ type SigningKey = Parameters<SignJWT["sign"]>[0];
 
 let primaryPrivateKey: SigningKey | undefined;
 let localJwksResolver: ReturnType<typeof createLocalJWKSet>;
+let localJwksJson = "";
 
 const buildToken = async (
   payload: JWTPayload,
@@ -56,7 +57,9 @@ beforeAll(async () => {
   jwk.kid = "test-kid";
   jwk.use = "sig";
   jwk.alg = "RS256";
-  localJwksResolver = createLocalJWKSet({ keys: [jwk] });
+  const jwks = { keys: [jwk] };
+  localJwksResolver = createLocalJWKSet(jwks);
+  localJwksJson = JSON.stringify(jwks);
 });
 
 describe("auth verifier", () => {
@@ -81,6 +84,24 @@ describe("auth verifier", () => {
     expect(claims.jwtId).toBe("jti-default");
     expect(claims.issuedAt).toBeGreaterThan(0);
     expect(claims.expiresAt).toBeGreaterThan(claims.issuedAt);
+  });
+
+  it("verifies valid token using jwksJson", async () => {
+    const token = await buildToken({
+      agent_id: "agent_exec",
+      workspace_id: "wk_01",
+      role: "participant",
+      session_id: "sess_01"
+    });
+
+    const claims = await verifyAccessToken(token, {
+      issuer,
+      audience,
+      jwksJson: localJwksJson
+    });
+
+    expect(claims.agentId).toBe("agent_exec");
+    expect(claims.workspaceId).toBe("wk_01");
   });
 
   it("rejects expired token", async () => {

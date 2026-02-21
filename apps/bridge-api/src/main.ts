@@ -20,12 +20,25 @@ try {
   const sessionStore = new DbSessionStore(db);
   const triggerStore = new DbTriggerStore(db);
   const auditStore = new DbAuditStore(db);
-  const verifyAccessToken = createAccessTokenVerifier({
-    issuer: config.AUTH_ISSUER,
-    audience: config.AUTH_AUDIENCE,
-    jwksUrl: config.AUTH_JWKS_URL
-  });
+  const verifierOptions =
+    config.AUTH_JWKS_JSON !== undefined
+      ? {
+          issuer: config.AUTH_ISSUER,
+          audience: config.AUTH_AUDIENCE,
+          jwksJson: config.AUTH_JWKS_JSON
+        }
+      : {
+          issuer: config.AUTH_ISSUER,
+          audience: config.AUTH_AUDIENCE,
+          jwksUrl:
+            config.AUTH_JWKS_URL ??
+            (() => {
+              throw new Error("AUTH_JWKS_URL is required when AUTH_JWKS_JSON is not provided");
+            })()
+        };
+  const verifyAccessToken = createAccessTokenVerifier(verifierOptions);
   const app = createBridgeApiApp({
+    workspaceId: config.WORKSPACE_ID,
     threadStore,
     sessionStore,
     triggerStore,
