@@ -32,12 +32,14 @@ describe("runtime config contract", () => {
     expect(config.WORKER_MAX_PARALLEL_JOBS).toBe(10);
     expect(config.TRIGGER_QUIET_WINDOW_MS).toBe(20000);
     expect(config.TRIGGER_RATE_LIMIT_PER_MINUTE).toBe(10);
+    expect(config.AUTO_UNREAD_ENABLED).toBe(true);
     expect(config.AUTO_UNREAD_MAX_TRIGGERS_PER_WINDOW).toBe(3);
     expect(config.AUTO_UNREAD_WINDOW_MS).toBe(300000);
     expect(config.AUTO_UNREAD_MIN_INTERVAL_MS).toBe(30000);
     expect(config.AUTO_UNREAD_BREAKER_BACKLOG_THRESHOLD).toBe(50);
     expect(config.AUTO_UNREAD_BREAKER_COOLDOWN_MS).toBe(60000);
     expect(config.TRIGGERING_LEASE_TIMEOUT_MS).toBe(45000);
+    expect(config.WORKER_MIN_JOB_CREATED_AT).toBeUndefined();
   });
 
   it("fails fast when required env is missing", () => {
@@ -49,11 +51,49 @@ describe("runtime config contract", () => {
     }).toThrow(ConfigValidationError);
   });
 
+  it("accepts inline jwks json config without jwks url", () => {
+    const config = loadBridgeApiConfig({
+      ...baseEnv,
+      AUTH_JWKS_URL: undefined,
+      AUTH_JWKS_JSON: '{"keys":[]}'
+    });
+
+    expect(config.AUTH_JWKS_JSON).toBe('{"keys":[]}');
+  });
+
+  it("fails when both jwks url and jwks json are missing", () => {
+    expect(() => {
+      loadBridgeApiConfig({
+        ...baseEnv,
+        AUTH_JWKS_URL: undefined,
+        AUTH_JWKS_JSON: undefined
+      });
+    }).toThrow(ConfigValidationError);
+  });
+
   it("rejects automated redaction enablement in personal MVP", () => {
     expect(() => {
       loadSupervisorWorkerConfig({
         ...baseEnv,
         ENABLE_AUTOMATED_REDACTION: "true"
+      });
+    }).toThrow(ConfigValidationError);
+  });
+
+  it("parses worker minimum job cutoff as datetime", () => {
+    const config = loadSupervisorWorkerConfig({
+      ...baseEnv,
+      WORKER_MIN_JOB_CREATED_AT: "2026-02-21T01:13:50.000Z"
+    });
+
+    expect(config.WORKER_MIN_JOB_CREATED_AT?.toISOString()).toBe("2026-02-21T01:13:50.000Z");
+  });
+
+  it("rejects invalid worker minimum job cutoff datetime", () => {
+    expect(() => {
+      loadSupervisorWorkerConfig({
+        ...baseEnv,
+        WORKER_MIN_JOB_CREATED_AT: "not-a-date"
       });
     }).toThrow(ConfigValidationError);
   });

@@ -27,17 +27,26 @@ const booleanWithDefault = (value: boolean) =>
     .default(value ? "true" : "false")
     .transform((raw) => raw === "true");
 
+const optionalIsoDateTime = z
+  .string()
+  .datetime({
+    offset: true
+  })
+  .optional()
+  .transform((raw) => (raw === undefined ? undefined : new Date(raw)));
+
 const disabledAutomationFlag = z
   .enum(["false"])
   .optional()
   .default("false")
   .transform(() => false);
 
-const runtimeConfigSchema = z.object({
+const runtimeConfigBaseSchema = z.object({
   NODE_ENV: z.enum(["development", "test", "production"]).optional().default("development"),
   WORKSPACE_ID: z.string().min(1),
   DATABASE_URL: z.string().url(),
-  AUTH_JWKS_URL: z.string().url(),
+  AUTH_JWKS_URL: z.string().url().optional(),
+  AUTH_JWKS_JSON: z.string().min(1).optional(),
   AUTH_ISSUER: z.string().min(1),
   AUTH_AUDIENCE: stringWithDefault("orkiva"),
   LOG_LEVEL: z
@@ -56,6 +65,7 @@ const runtimeConfigSchema = z.object({
   TRIGGER_RECHECK_MS: positiveIntWithDefault(5000),
   TRIGGER_MAX_DEFER_MS: positiveIntWithDefault(60000),
   TRIGGER_RATE_LIMIT_PER_MINUTE: positiveIntWithDefault(10),
+  AUTO_UNREAD_ENABLED: booleanWithDefault(true),
   AUTO_UNREAD_MAX_TRIGGERS_PER_WINDOW: positiveIntWithDefault(3),
   AUTO_UNREAD_WINDOW_MS: positiveIntWithDefault(300000),
   AUTO_UNREAD_MIN_INTERVAL_MS: positiveIntWithDefault(30000),
@@ -67,23 +77,43 @@ const runtimeConfigSchema = z.object({
   SESSION_STALE_AFTER_HOURS: positiveIntWithDefault(12),
   WORKER_BRIDGE_API_BASE_URL: stringWithDefault("http://127.0.0.1:3000"),
   WORKER_BRIDGE_ACCESS_TOKEN: z.string().min(1).optional(),
+  WORKER_MIN_JOB_CREATED_AT: optionalIsoDateTime,
   WORKER_CALLBACK_MAX_RETRIES: positiveIntWithDefault(3),
   WORKER_CALLBACK_REQUEST_TIMEOUT_MS: positiveIntWithDefault(8000)
 });
 
-const bridgeApiConfigSchema = runtimeConfigSchema.extend({
-  API_HOST: stringWithDefault("0.0.0.0"),
-  API_PORT: positiveIntWithDefault(3000)
-});
+const withAuthConfigGuard = <Shape extends z.ZodRawShape>(
+  schema: z.ZodObject<Shape>
+): z.ZodEffects<z.ZodObject<Shape>> =>
+  schema.superRefine((config, ctx) => {
+    if (config["AUTH_JWKS_URL"] === undefined && config["AUTH_JWKS_JSON"] === undefined) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["AUTH_JWKS_URL"],
+        message: 'Either "AUTH_JWKS_URL" or "AUTH_JWKS_JSON" is required'
+      });
+    }
+  });
 
-const supervisorWorkerConfigSchema = runtimeConfigSchema.extend({
-  WORKER_POLL_INTERVAL_MS: positiveIntWithDefault(5000),
-  WORKER_MAX_PARALLEL_JOBS: positiveIntWithDefault(10)
-});
+const bridgeApiConfigSchema = withAuthConfigGuard(
+  runtimeConfigBaseSchema.extend({
+    API_HOST: stringWithDefault("0.0.0.0"),
+    API_PORT: positiveIntWithDefault(3000)
+  })
+);
 
-const operatorCliConfigSchema = runtimeConfigSchema.extend({
-  OPERATOR_OUTPUT_FORMAT: z.enum(["json", "pretty"]).optional().default("pretty")
-});
+const supervisorWorkerConfigSchema = withAuthConfigGuard(
+  runtimeConfigBaseSchema.extend({
+    WORKER_POLL_INTERVAL_MS: positiveIntWithDefault(5000),
+    WORKER_MAX_PARALLEL_JOBS: positiveIntWithDefault(10)
+  })
+);
+
+const operatorCliConfigSchema = withAuthConfigGuard(
+  runtimeConfigBaseSchema.extend({
+    OPERATOR_OUTPUT_FORMAT: z.enum(["json", "pretty"]).optional().default("pretty")
+  })
+);
 
 export type BridgeApiConfig = z.output<typeof bridgeApiConfigSchema>;
 export type SupervisorWorkerConfig = z.output<typeof supervisorWorkerConfigSchema>;
