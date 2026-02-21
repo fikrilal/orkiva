@@ -10,7 +10,13 @@ if [[ ! -f "$DEV_AUTH_ENV" ]]; then
   exit 1
 fi
 
-WORKER_MIN_JOB_CREATED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+WORKER_MIN_JOB_CREATED_AT="$(date -u +%Y-%m-%dT%H:%M:%S.000Z)"
+
+echo "dev-stack-safe: building shared package (ensures latest runtime env schema)"
+(
+  cd "$ROOT_DIR"
+  pnpm --filter @orkiva/shared build >/dev/null
+)
 
 echo "dev-stack-safe: starting bridge-api + supervisor-worker"
 echo "dev-stack-safe: AUTO_UNREAD_ENABLED=false"
@@ -40,10 +46,17 @@ trap cleanup EXIT INT TERM
 bridge_pid="$!"
 
 (
-  cd "$ROOT_DIR"
-  AUTO_UNREAD_ENABLED=false \
-  WORKER_MIN_JOB_CREATED_AT="$WORKER_MIN_JOB_CREATED_AT" \
-    pnpm --filter @orkiva/supervisor-worker dev
+  cd "$ROOT_DIR/apps/supervisor-worker"
+  AUTO_UNREAD_ENABLED=false WORKER_MIN_JOB_CREATED_AT="$WORKER_MIN_JOB_CREATED_AT" bash -lc '
+    set -a
+    [ -f ../../.env ] && source ../../.env
+    [ -f ../../.env.dev-auth ] && source ../../.env.dev-auth
+    set +a
+    # Re-apply safe-mode overrides after env files are sourced.
+    export AUTO_UNREAD_ENABLED=false
+    export WORKER_MIN_JOB_CREATED_AT="${WORKER_MIN_JOB_CREATED_AT}"
+    tsx watch src/main.ts
+  '
 ) &
 worker_pid="$!"
 
