@@ -164,6 +164,7 @@ export interface TriggerQueueStore {
     limit: number;
     claimedAt: Date;
     triggeringLeaseTimeoutMs: number;
+    minJobCreatedAt?: Date;
   }): Promise<readonly TriggerJobRecord[]>;
   recordAttemptAndTransition(input: {
     triggerId: string;
@@ -200,8 +201,13 @@ const toTransitionStatusForRetry = (attemptResult: TriggerAttemptResult): Trigge
 const isClaimEligible = (
   job: TriggerJobRecord,
   claimedAt: Date,
-  triggeringLeaseTimeoutMs: number
+  triggeringLeaseTimeoutMs: number,
+  minJobCreatedAt?: Date
 ): boolean => {
+  if (minJobCreatedAt !== undefined && job.createdAt.getTime() < minJobCreatedAt.getTime()) {
+    return false;
+  }
+
   const dueByRetryWindow =
     job.nextRetryAt === null || job.nextRetryAt.getTime() <= claimedAt.getTime();
   if (!dueByRetryWindow) {
@@ -399,7 +405,8 @@ export class TriggerQueueProcessor {
     private readonly executionTimeoutMs = 8000,
     private readonly triggeringLeaseTimeoutMs = 45000,
     private readonly callbackMaxRetries = 3,
-    private readonly callbackExecutor: TriggerCallbackExecutor = new NoopTriggerCallbackExecutor()
+    private readonly callbackExecutor: TriggerCallbackExecutor = new NoopTriggerCallbackExecutor(),
+    private readonly minJobCreatedAt?: Date
   ) {}
 
   private timeoutOutcome(input: {
@@ -657,7 +664,8 @@ export class TriggerQueueProcessor {
       workspaceId: input.workspaceId,
       limit: input.limit,
       claimedAt: processedAt,
-      triggeringLeaseTimeoutMs: this.triggeringLeaseTimeoutMs
+      triggeringLeaseTimeoutMs: this.triggeringLeaseTimeoutMs,
+      ...(this.minJobCreatedAt === undefined ? {} : { minJobCreatedAt: this.minJobCreatedAt })
     });
 
     let delivered = 0;
@@ -685,7 +693,9 @@ export class TriggerQueueProcessor {
         ...correlationContext,
         attempt_no: attemptNo
       });
-      const latestExecutionAttempt = await this.store.getLatestTriggerExecutionAttempt(job.triggerId);
+      const latestExecutionAttempt = await this.store.getLatestTriggerExecutionAttempt(
+        job.triggerId
+      );
       const recoveredFromStaleTriggering = this.shouldResumeFromCallbackStage({
         job,
         latestExecutionAttempt
@@ -796,36 +806,35 @@ export class TriggerQueueProcessor {
       const requiresDirectFallback =
         effectiveStatus === "fallback_resume" || effectiveStatus === "fallback_spawn";
       const rateLimitedOutcome = this.applyRateLimit(job, processedAt);
-      const outcome =
-        requiresDirectFallback
-          ? toDirectFallbackRequiredOutcome(
-              effectiveStatus === "fallback_resume" ? "fallback_resume" : "fallback_spawn"
-            )
-          : rateLimitedOutcome ??
-            (await this.runWithTimeout({
+      const outcome = requiresDirectFallback
+        ? toDirectFallbackRequiredOutcome(
+            effectiveStatus === "fallback_resume" ? "fallback_resume" : "fallback_spawn"
+          )
+        : (rateLimitedOutcome ??
+          (await this.runWithTimeout({
+            phase: "executor",
+            triggerId: job.triggerId,
+            attemptNo,
+            execute: () =>
+              this.executor.execute({
+                job,
+                attemptNo,
+                now: processedAt
+              }),
+            onTimeout: () =>
+              this.timeoutOutcome({
+                phase: "executor",
+                triggerId: job.triggerId,
+                attemptNo
+              })
+          }).catch((error: unknown) =>
+            this.exceptionOutcome({
               phase: "executor",
               triggerId: job.triggerId,
               attemptNo,
-              execute: () =>
-                this.executor.execute({
-                  job,
-                  attemptNo,
-                  now: processedAt
-                }),
-              onTimeout: () =>
-                this.timeoutOutcome({
-                  phase: "executor",
-                  triggerId: job.triggerId,
-                  attemptNo
-                })
-            }).catch((error: unknown) =>
-              this.exceptionOutcome({
-                phase: "executor",
-                triggerId: job.triggerId,
-                attemptNo,
-                error
-              })
-            ));
+              error
+            })
+          )));
 
       const shouldRetry =
         outcome.attemptResult === "deferred"
@@ -1096,10 +1105,13 @@ export class InMemoryTriggerQueueStore implements TriggerQueueStore {
     limit: number;
     claimedAt: Date;
     triggeringLeaseTimeoutMs: number;
+    minJobCreatedAt?: Date;
   }): Promise<readonly TriggerJobRecord[]> {
     const due = [...this.jobs.values()]
       .filter((job) => job.workspaceId === input.workspaceId)
-      .filter((job) => isClaimEligible(job, input.claimedAt, input.triggeringLeaseTimeoutMs))
+      .filter((job) =>
+        isClaimEligible(job, input.claimedAt, input.triggeringLeaseTimeoutMs, input.minJobCreatedAt)
+      )
       .sort((left, right) => left.createdAt.getTime() - right.createdAt.getTime())
       .slice(0, input.limit);
 
@@ -1280,7 +1292,10 @@ export class DbTriggerQueueStore implements TriggerQueueStore {
   public async countPendingJobs(input: { workspaceId: string }): Promise<number> {
     const rows = await this.db.query.triggerJobs.findMany({
       where: (table) =>
-        and(eq(table.workspaceId, input.workspaceId), inArray(table.status, [...PENDING_TRIGGER_JOB_STATUSES])),
+        and(
+          eq(table.workspaceId, input.workspaceId),
+          inArray(table.status, [...PENDING_TRIGGER_JOB_STATUSES])
+        ),
       columns: {
         triggerId: true
       }
@@ -1349,6 +1364,7 @@ export class DbTriggerQueueStore implements TriggerQueueStore {
     limit: number;
     claimedAt: Date;
     triggeringLeaseTimeoutMs: number;
+    minJobCreatedAt?: Date;
   }): Promise<readonly TriggerJobRecord[]> {
     const reclaimBefore = new Date(input.claimedAt.getTime() - input.triggeringLeaseTimeoutMs);
     const candidates = await this.db.query.triggerJobs.findMany({
@@ -1364,7 +1380,10 @@ export class DbTriggerQueueStore implements TriggerQueueStore {
             inArray(table.status, [...CALLBACK_DUE_TRIGGER_STATUSES]),
             and(eq(table.status, "triggering"), lte(table.updatedAt, reclaimBefore))
           ),
-          or(isNull(table.nextRetryAt), lte(table.nextRetryAt, input.claimedAt))
+          or(isNull(table.nextRetryAt), lte(table.nextRetryAt, input.claimedAt)),
+          input.minJobCreatedAt === undefined
+            ? undefined
+            : gte(table.createdAt, input.minJobCreatedAt)
         ),
       orderBy: (table) => [asc(table.createdAt)],
       limit: Math.max(input.limit * 3, input.limit)
@@ -1534,9 +1553,7 @@ export class DbTriggerQueueStore implements TriggerQueueStore {
       attemptNo: first.attemptNo,
       attemptResult: first.result,
       ...(first.errorCode === null ? {} : { errorCode: first.errorCode }),
-      ...(first.details === null
-        ? {}
-        : { details: first.details as Record<string, unknown> }),
+      ...(first.details === null ? {} : { details: first.details as Record<string, unknown> }),
       createdAt: first.createdAt
     };
   }

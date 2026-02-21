@@ -106,4 +106,74 @@ describe("supervisor worker loop", () => {
     expect(result.runtimeReconciliation.transitionedOffline).toBe(1);
     expect(result.triggerQueueProcessing.claimedJobs).toBe(2);
   });
+
+  it("skips auto-unread reconciliation and scheduling when disabled", async () => {
+    const tickAt = new Date("2026-02-18T10:30:00.000Z");
+    const unreadReconcile = vi.fn(() =>
+      Promise.resolve({
+        workspaceId: "wk_01",
+        polledAt: tickAt,
+        candidates: [],
+        stats: {
+          participantsScanned: 1,
+          unreadParticipants: 1,
+          dormantUnreadParticipants: 1,
+          deduplicatedParticipants: 0
+        }
+      })
+    );
+    const runtimeReconcile = vi.fn(() =>
+      Promise.resolve({
+        workspaceId: "wk_01",
+        reconciledAt: tickAt,
+        checkedRuntimes: 2,
+        transitionedOffline: 0
+      })
+    );
+    const schedule = vi.fn();
+    const countPendingJobs = vi.fn();
+    const processDueJobs = vi.fn(() =>
+      Promise.resolve({
+        workspaceId: "wk_01",
+        processedAt: tickAt,
+        claimedJobs: 0,
+        delivered: 0,
+        retried: 0,
+        deadLettered: 0,
+        failed: 0,
+        fallbackResumed: 0,
+        fallbackSpawned: 0,
+        callbackDelivered: 0,
+        callbackRetried: 0,
+        callbackFailed: 0,
+        autoBlocked: 0,
+        deadLetterJobIds: []
+      })
+    );
+
+    const loop = new SupervisorWorkerLoop(
+      { reconcile: unreadReconcile },
+      { schedule },
+      { reconcileWorkspaceRuntimes: runtimeReconcile },
+      { countPendingJobs },
+      { processDueJobs }
+    );
+
+    const result = await loop.runTick({
+      workspaceId: "wk_01",
+      staleAfterHours: 12,
+      triggerMaxRetries: 2,
+      maxJobsPerTick: 10,
+      autoUnreadEnabled: false,
+      tickAt
+    });
+
+    expect(unreadReconcile).not.toHaveBeenCalled();
+    expect(countPendingJobs).not.toHaveBeenCalled();
+    expect(schedule).not.toHaveBeenCalled();
+    expect(result.unreadReconciliation.stats.participantsScanned).toBe(0);
+    expect(result.unreadTriggerScheduling.enqueued).toBe(0);
+    expect(runtimeReconcile).toHaveBeenCalledTimes(1);
+    expect(processDueJobs).toHaveBeenCalledTimes(1);
+  });
 });

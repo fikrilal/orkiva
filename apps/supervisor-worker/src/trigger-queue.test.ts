@@ -109,6 +109,63 @@ describe("trigger queue processing", () => {
     expect(afterSecond?.nextRetryAt).toBeNull();
   });
 
+  it("skips claiming historical jobs before configured startup cutoff", async () => {
+    const store = new InMemoryTriggerQueueStore([
+      queuedJob({
+        triggerId: "trg_old_01",
+        maxRetries: 1,
+        createdAt: new Date("2026-02-18T09:59:59.000Z"),
+        updatedAt: new Date("2026-02-18T09:59:59.000Z")
+      }),
+      queuedJob({
+        triggerId: "trg_new_01",
+        maxRetries: 1,
+        createdAt: new Date("2026-02-18T10:00:01.000Z"),
+        updatedAt: new Date("2026-02-18T10:00:01.000Z")
+      })
+    ]);
+    const executor: TriggerJobExecutor = {
+      execute: () =>
+        Promise.resolve({
+          attemptResult: "delivered",
+          retryable: false
+        })
+    };
+    const processor = new TriggerQueueProcessor(
+      store,
+      executor,
+      new NoopTriggerFallbackExecutor(),
+      {
+        deferRecheckMs: 5000,
+        rateLimitPerMinute: 10,
+        loopMaxTurns: 20,
+        loopMaxRepeatedFindings: 3
+      },
+      2000,
+      60000,
+      undefined,
+      8000,
+      45000,
+      3,
+      undefined,
+      new Date("2026-02-18T10:00:00.000Z")
+    );
+
+    const result = await processor.processDueJobs({
+      workspaceId: "wk_01",
+      limit: 10,
+      processedAt: new Date("2026-02-18T10:01:00.000Z")
+    });
+
+    expect(result.claimedJobs).toBe(1);
+    const oldJob = await store.getJobById("trg_old_01");
+    const newJob = await store.getJobById("trg_new_01");
+    expect(oldJob?.status).toBe("queued");
+    expect(oldJob?.attempts).toBe(0);
+    expect(newJob?.status).toBe("callback_pending");
+    expect(newJob?.attempts).toBe(1);
+  });
+
   it("executes fallback chain after max retry exhaustion", async () => {
     const store = new InMemoryTriggerQueueStore([
       queuedJob({
@@ -487,12 +544,17 @@ describe("trigger queue processing", () => {
           }
         } satisfies TriggerExecutionOutcome)
     };
-    const processor = new TriggerQueueProcessor(store, executor, new NoopTriggerFallbackExecutor(), {
-      deferRecheckMs: 5000,
-      rateLimitPerMinute: 10,
-      loopMaxTurns: 1,
-      loopMaxRepeatedFindings: 3
-    });
+    const processor = new TriggerQueueProcessor(
+      store,
+      executor,
+      new NoopTriggerFallbackExecutor(),
+      {
+        deferRecheckMs: 5000,
+        rateLimitPerMinute: 10,
+        loopMaxTurns: 1,
+        loopMaxRepeatedFindings: 3
+      }
+    );
 
     const result = await processor.processDueJobs({
       workspaceId: "wk_01",
@@ -659,12 +721,17 @@ describe("trigger queue processing", () => {
       } satisfies TriggerExecutionOutcome)
     );
     const executor: TriggerJobExecutor = { execute };
-    const processor = new TriggerQueueProcessor(store, executor, new NoopTriggerFallbackExecutor(), {
-      deferRecheckMs: 5000,
-      rateLimitPerMinute: 10,
-      loopMaxTurns: 20,
-      loopMaxRepeatedFindings: 3
-    });
+    const processor = new TriggerQueueProcessor(
+      store,
+      executor,
+      new NoopTriggerFallbackExecutor(),
+      {
+        deferRecheckMs: 5000,
+        rateLimitPerMinute: 10,
+        loopMaxTurns: 20,
+        loopMaxRepeatedFindings: 3
+      }
+    );
 
     const result = await processor.processDueJobs({
       workspaceId: "wk_01",

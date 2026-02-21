@@ -21,6 +21,7 @@ export interface SupervisorWorkerLoopInput {
   staleAfterHours: number;
   triggerMaxRetries: number;
   maxJobsPerTick: number;
+  autoUnreadEnabled?: boolean;
   tickAt?: Date;
 }
 
@@ -44,21 +45,49 @@ export class SupervisorWorkerLoop {
 
   public async runTick(input: SupervisorWorkerLoopInput): Promise<SupervisorWorkerLoopResult> {
     const tickAt = input.tickAt ?? new Date();
-    const unreadReconciliation = await this.unreadReconciliationService.reconcile({
-      workspaceId: input.workspaceId,
-      staleAfterHours: input.staleAfterHours,
-      polledAt: tickAt
-    });
-    const pendingJobs = await this.triggerQueueBacklogStore.countPendingJobs({
-      workspaceId: input.workspaceId
-    });
-    const unreadTriggerScheduling = await this.unreadTriggerJobScheduler.schedule({
-      workspaceId: input.workspaceId,
-      candidates: unreadReconciliation.candidates,
-      triggerMaxRetries: input.triggerMaxRetries,
-      pendingJobs,
-      scheduledAt: tickAt
-    });
+    const autoUnreadEnabled = input.autoUnreadEnabled ?? true;
+    const unreadReconciliation = autoUnreadEnabled
+      ? await this.unreadReconciliationService.reconcile({
+          workspaceId: input.workspaceId,
+          staleAfterHours: input.staleAfterHours,
+          polledAt: tickAt
+        })
+      : {
+          workspaceId: input.workspaceId,
+          polledAt: tickAt,
+          candidates: [],
+          stats: {
+            participantsScanned: 0,
+            unreadParticipants: 0,
+            dormantUnreadParticipants: 0,
+            deduplicatedParticipants: 0
+          }
+        };
+    const pendingJobs = autoUnreadEnabled
+      ? await this.triggerQueueBacklogStore.countPendingJobs({
+          workspaceId: input.workspaceId
+        })
+      : 0;
+    const unreadTriggerScheduling = autoUnreadEnabled
+      ? await this.unreadTriggerJobScheduler.schedule({
+          workspaceId: input.workspaceId,
+          candidates: unreadReconciliation.candidates,
+          triggerMaxRetries: input.triggerMaxRetries,
+          pendingJobs,
+          scheduledAt: tickAt
+        })
+      : {
+          workspaceId: input.workspaceId,
+          scheduledAt: tickAt,
+          candidates: 0,
+          enqueued: 0,
+          skippedPending: 0,
+          reusedExisting: 0,
+          suppressedByBudget: 0,
+          suppressedByBreaker: 0,
+          breakerOpen: false,
+          pendingJobs
+        };
     const runtimeReconciliation = await this.runtimeRegistryService.reconcileWorkspaceRuntimes({
       workspaceId: input.workspaceId,
       staleAfterHours: input.staleAfterHours,

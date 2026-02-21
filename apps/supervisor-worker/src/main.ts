@@ -69,7 +69,8 @@ try {
     config.TRIGGER_ACK_TIMEOUT_MS,
     config.TRIGGERING_LEASE_TIMEOUT_MS,
     config.WORKER_CALLBACK_MAX_RETRIES,
-    callbackExecutor
+    callbackExecutor,
+    config.WORKER_MIN_JOB_CREATED_AT
   );
   const workerLoop = new SupervisorWorkerLoop(
     reconciliationService,
@@ -90,7 +91,8 @@ try {
       workspaceId: config.WORKSPACE_ID,
       staleAfterHours: config.SESSION_STALE_AFTER_HOURS,
       triggerMaxRetries: config.TRIGGER_MAX_RETRIES,
-      maxJobsPerTick: config.WORKER_MAX_PARALLEL_JOBS
+      maxJobsPerTick: config.WORKER_MAX_PARALLEL_JOBS,
+      autoUnreadEnabled: config.AUTO_UNREAD_ENABLED
     });
     const unreadResult = result.unreadReconciliation;
     const unreadTriggerScheduling = result.unreadTriggerScheduling;
@@ -183,7 +185,12 @@ try {
 
   logger.info("bootstrap.complete", {
     workspace: config.WORKSPACE_ID,
-    poll_interval_ms: config.WORKER_POLL_INTERVAL_MS
+    poll_interval_ms: config.WORKER_POLL_INTERVAL_MS,
+    auto_unread_enabled: config.AUTO_UNREAD_ENABLED,
+    worker_min_job_created_at:
+      config.WORKER_MIN_JOB_CREATED_AT === undefined
+        ? null
+        : config.WORKER_MIN_JOB_CREATED_AT.toISOString()
   });
 } catch (error) {
   logger.error("config.invalid", {

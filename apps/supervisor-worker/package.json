@@ -9,8 +9,9 @@
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run --config ../../vitest.config.ts",
-    "dev": "bash -lc 'set -a; [ -f ../../.env ] && source ../../.env; set +a; tsx watch src/main.ts'",
-    "start": "bash -lc 'set -a; [ -f ../../.env ] && source ../../.env; set +a; node dist/main.js'"
+    "dev": "bash -lc 'set -a; [ -f ../../.env ] && source ../../.env; [ -f ../../.env.dev-auth ] && source ../../.env.dev-auth; set +a; tsx watch src/main.ts'",
+    "dev:fresh": "bash -lc 'set -a; [ -f ../../.env ] && source ../../.env; [ -f ../../.env.dev-auth ] && source ../../.env.dev-auth; set +a; export WORKER_MIN_JOB_CREATED_AT=\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\"; tsx watch src/main.ts'",
+    "start": "bash -lc 'set -a; [ -f ../../.env ] && source ../../.env; [ -f ../../.env.dev-auth ] && source ../../.env.dev-auth; set +a; node dist/main.js'"
   },
   "dependencies": {
     "@orkiva/db": "workspace:*",
