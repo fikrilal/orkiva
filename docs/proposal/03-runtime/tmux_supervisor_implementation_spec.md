@@ -200,7 +200,15 @@ Fallback launch semantics:
 - Supervisor treats fallback `resume`/`spawn` as non-blocking launch actions.
 - A fallback operation is successful when process start is accepted (detached launch), not when the downstream task fully completes.
 - Long-running task completion remains asynchronous and is tracked through normal bridge signals.
-- Supervisor must enqueue a worker-owned completion callback after trigger/fallback execution and deliver it through bridge `post_message` (`event_type=trigger.completed`) with persisted retries and idempotent replay.
+- Fallback commands must run without `--dangerously-bypass-approvals-and-sandbox` by default.
+- High-privilege fallback mode is allowed only via explicit operator configuration (`WORKER_FALLBACK_ALLOW_DANGEROUS_BYPASS=true`) and should be treated as exceptional.
+- Supervisor must enqueue worker-owned lifecycle callbacks through bridge `post_message` with persisted retries and idempotent replay:
+  - `event_type=trigger.dispatched` when fallback launch is accepted
+  - `event_type=trigger.completed` only after terminal outcome
+- Fallback run watchdog:
+  - each running fallback execution has a deadline (`WORKER_FALLBACK_EXEC_TIMEOUT_MS`)
+  - worker reconciles running fallback executions each tick
+  - timeout path escalates to process termination and terminal callback queueing.
 
 ## 7.3 Human collision deferred path
 1. Supervisor detects operator-busy pane.

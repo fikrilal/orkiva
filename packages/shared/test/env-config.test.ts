@@ -39,6 +39,11 @@ describe("runtime config contract", () => {
     expect(config.AUTO_UNREAD_BREAKER_BACKLOG_THRESHOLD).toBe(50);
     expect(config.AUTO_UNREAD_BREAKER_COOLDOWN_MS).toBe(60000);
     expect(config.TRIGGERING_LEASE_TIMEOUT_MS).toBe(45000);
+    expect(config.WORKER_FALLBACK_ALLOW_DANGEROUS_BYPASS).toBe(false);
+    expect(config.WORKER_FALLBACK_EXEC_TIMEOUT_MS).toBe(900000);
+    expect(config.WORKER_FALLBACK_KILL_GRACE_MS).toBe(5000);
+    expect(config.WORKER_FALLBACK_MAX_ACTIVE_GLOBAL).toBe(8);
+    expect(config.WORKER_FALLBACK_MAX_ACTIVE_PER_AGENT).toBe(2);
     expect(config.WORKER_MIN_JOB_CREATED_AT).toBeUndefined();
   });
 
@@ -87,6 +92,15 @@ describe("runtime config contract", () => {
     });
 
     expect(config.WORKER_MIN_JOB_CREATED_AT?.toISOString()).toBe("2026-02-21T01:13:50.000Z");
+  });
+
+  it("parses fallback dangerous bypass override for worker", () => {
+    const config = loadSupervisorWorkerConfig({
+      ...baseEnv,
+      WORKER_FALLBACK_ALLOW_DANGEROUS_BYPASS: "true"
+    });
+
+    expect(config.WORKER_FALLBACK_ALLOW_DANGEROUS_BYPASS).toBe(true);
   });
 
   it("rejects invalid worker minimum job cutoff datetime", () => {

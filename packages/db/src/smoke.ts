@@ -14,6 +14,7 @@ const requiredTables = [
   "session_registry",
   "trigger_jobs",
   "trigger_attempts",
+  "trigger_fallback_runs",
   "audit_events"
 ] as const;
 

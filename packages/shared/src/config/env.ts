@@ -105,7 +105,12 @@ const bridgeApiConfigSchema = withAuthConfigGuard(
 const supervisorWorkerConfigSchema = withAuthConfigGuard(
   runtimeConfigBaseSchema.extend({
     WORKER_POLL_INTERVAL_MS: positiveIntWithDefault(5000),
-    WORKER_MAX_PARALLEL_JOBS: positiveIntWithDefault(10)
+    WORKER_MAX_PARALLEL_JOBS: positiveIntWithDefault(10),
+    WORKER_FALLBACK_ALLOW_DANGEROUS_BYPASS: booleanWithDefault(false),
+    WORKER_FALLBACK_EXEC_TIMEOUT_MS: positiveIntWithDefault(900000),
+    WORKER_FALLBACK_KILL_GRACE_MS: positiveIntWithDefault(5000),
+    WORKER_FALLBACK_MAX_ACTIVE_GLOBAL: positiveIntWithDefault(8),
+    WORKER_FALLBACK_MAX_ACTIVE_PER_AGENT: positiveIntWithDefault(2)
   })
 );
 

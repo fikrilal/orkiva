@@ -56,7 +56,23 @@ describe("supervisor worker loop", () => {
         callbackRetried: 0,
         callbackFailed: 0,
         autoBlocked: 0,
+        fallbackRunsScanned: 0,
+        fallbackRunsQueuedForCompletion: 0,
+        fallbackRunsTimedOut: 0,
+        fallbackRunsKilled: 0,
+        fallbackRunsOrphaned: 0,
         deadLetterJobIds: []
+      })
+    );
+    const reconcileFallbackRuns = vi.fn(() =>
+      Promise.resolve({
+        workspaceId: "wk_01",
+        processedAt: tickAt,
+        scanned: 1,
+        queuedForCompletion: 1,
+        timedOut: 0,
+        killed: 0,
+        orphaned: 1
       })
     );
 
@@ -65,7 +81,7 @@ describe("supervisor worker loop", () => {
       { schedule },
       { reconcileWorkspaceRuntimes: runtimeReconcile },
       { countPendingJobs },
-      { processDueJobs }
+      { processDueJobs, reconcileFallbackRuns }
     );
 
     const result = await loop.runTick({
@@ -101,10 +117,16 @@ describe("supervisor worker loop", () => {
       limit: 10,
       processedAt: tickAt
     });
+    expect(reconcileFallbackRuns).toHaveBeenCalledWith({
+      workspaceId: "wk_01",
+      limit: 10,
+      processedAt: tickAt
+    });
     expect(result.unreadReconciliation.stats.participantsScanned).toBe(4);
     expect(result.unreadTriggerScheduling.enqueued).toBe(0);
     expect(result.runtimeReconciliation.transitionedOffline).toBe(1);
     expect(result.triggerQueueProcessing.claimedJobs).toBe(2);
+    expect(result.triggerQueueProcessing.fallbackRunsOrphaned).toBe(1);
   });
 
   it("skips auto-unread reconciliation and scheduling when disabled", async () => {
@@ -147,7 +169,23 @@ describe("supervisor worker loop", () => {
         callbackRetried: 0,
         callbackFailed: 0,
         autoBlocked: 0,
+        fallbackRunsScanned: 0,
+        fallbackRunsQueuedForCompletion: 0,
+        fallbackRunsTimedOut: 0,
+        fallbackRunsKilled: 0,
+        fallbackRunsOrphaned: 0,
         deadLetterJobIds: []
+      })
+    );
+    const reconcileFallbackRuns = vi.fn(() =>
+      Promise.resolve({
+        workspaceId: "wk_01",
+        processedAt: tickAt,
+        scanned: 0,
+        queuedForCompletion: 0,
+        timedOut: 0,
+        killed: 0,
+        orphaned: 0
       })
     );
 
@@ -156,7 +194,7 @@ describe("supervisor worker loop", () => {
       { schedule },
       { reconcileWorkspaceRuntimes: runtimeReconcile },
       { countPendingJobs },
-      { processDueJobs }
+      { processDueJobs, reconcileFallbackRuns }
     );
 
     const result = await loop.runTick({
@@ -175,5 +213,6 @@ describe("supervisor worker loop", () => {
     expect(result.unreadTriggerScheduling.enqueued).toBe(0);
     expect(runtimeReconcile).toHaveBeenCalledTimes(1);
     expect(processDueJobs).toHaveBeenCalledTimes(1);
+    expect(reconcileFallbackRuns).toHaveBeenCalledTimes(1);
   });
 });

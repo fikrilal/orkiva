@@ -44,7 +44,8 @@ try {
     resumeMaxAttempts: config.TRIGGER_RESUME_MAX_ATTEMPTS,
     staleAfterHours: config.SESSION_STALE_AFTER_HOURS,
     crashLoopThreshold: config.LOOP_MAX_REPEATED_FINDINGS,
-    crashLoopWindowMs: 15 * 60 * 1000
+    crashLoopWindowMs: 15 * 60 * 1000,
+    allowDangerousBypass: config.WORKER_FALLBACK_ALLOW_DANGEROUS_BYPASS
   });
   const callbackExecutor = new BridgeTriggerCallbackExecutor({
     bridgeApiBaseUrl: config.WORKER_BRIDGE_API_BASE_URL,
@@ -70,7 +71,11 @@ try {
     config.TRIGGERING_LEASE_TIMEOUT_MS,
     config.WORKER_CALLBACK_MAX_RETRIES,
     callbackExecutor,
-    config.WORKER_MIN_JOB_CREATED_AT
+    config.WORKER_MIN_JOB_CREATED_AT,
+    config.WORKER_FALLBACK_EXEC_TIMEOUT_MS,
+    config.WORKER_FALLBACK_KILL_GRACE_MS,
+    config.WORKER_FALLBACK_MAX_ACTIVE_GLOBAL,
+    config.WORKER_FALLBACK_MAX_ACTIVE_PER_AGENT
   );
   const workerLoop = new SupervisorWorkerLoop(
     reconciliationService,
@@ -125,6 +130,11 @@ try {
         callback_delivered: queueResult.callbackDelivered,
         callback_retried: queueResult.callbackRetried,
         callback_failed: queueResult.callbackFailed,
+        fallback_runs_scanned: queueResult.fallbackRunsScanned,
+        fallback_runs_queued_for_completion: queueResult.fallbackRunsQueuedForCompletion,
+        fallback_runs_timed_out: queueResult.fallbackRunsTimedOut,
+        fallback_runs_killed: queueResult.fallbackRunsKilled,
+        fallback_runs_orphaned: queueResult.fallbackRunsOrphaned,
         auto_blocked: queueResult.autoBlocked,
         dead_lettered: queueResult.deadLettered
       });
@@ -190,7 +200,11 @@ try {
     worker_min_job_created_at:
       config.WORKER_MIN_JOB_CREATED_AT === undefined
         ? null
-        : config.WORKER_MIN_JOB_CREATED_AT.toISOString()
+        : config.WORKER_MIN_JOB_CREATED_AT.toISOString(),
+    worker_fallback_exec_timeout_ms: config.WORKER_FALLBACK_EXEC_TIMEOUT_MS,
+    worker_fallback_kill_grace_ms: config.WORKER_FALLBACK_KILL_GRACE_MS,
+    worker_fallback_max_active_global: config.WORKER_FALLBACK_MAX_ACTIVE_GLOBAL,
+    worker_fallback_max_active_per_agent: config.WORKER_FALLBACK_MAX_ACTIVE_PER_AGENT
   });
 } catch (error) {
   logger.error("config.invalid", {

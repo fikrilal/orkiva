@@ -107,6 +107,7 @@ describeDb("bridge-api db integration", () => {
   const db = createDb(pool);
   const sessionStore = new DbSessionStore(db);
   const app = createBridgeApiApp({
+    workspaceId: "wk_01",
     threadStore: new DbThreadStore(db),
     sessionStore,
     triggerStore: new DbTriggerStore(db),
@@ -333,6 +334,7 @@ describeDb("bridge-api db integration", () => {
   it("replays idempotent post_message after transient db post-write failure without message loss", async () => {
     const faultThreadStore = new FaultInjectingDbThreadStore(db);
     const faultApp = createBridgeApiApp({
+      workspaceId: "wk_01",
       threadStore: faultThreadStore,
       sessionStore,
       triggerStore: new DbTriggerStore(db),
@@ -433,6 +435,7 @@ describeDb("bridge-api db integration", () => {
   it("retains acknowledged messages after transient db read failure on replay", async () => {
     const faultThreadStore = new FaultInjectingDbThreadStore(db);
     const faultApp = createBridgeApiApp({
+      workspaceId: "wk_01",
       threadStore: faultThreadStore,
       sessionStore,
       triggerStore: new DbTriggerStore(db),

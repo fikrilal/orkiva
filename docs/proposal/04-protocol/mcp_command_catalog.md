@@ -12,6 +12,7 @@ Versioning rule:
 - Expose all commands under `/v1`.
 - Payloads include `schema_version` where defined in protocol.
 - For `post_message` with `kind=event`, payload metadata includes `event_version` (default-normalized to `1` when omitted for compatibility).
+- Trigger lifecycle events are additive under `/v1`: `trigger.dispatched` (launch accepted) and terminal-only `trigger.completed`.
 
 ### 2.1 Thread Commands
 1. `create_thread`

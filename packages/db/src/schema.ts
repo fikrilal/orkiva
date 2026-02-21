@@ -33,6 +33,7 @@ export const triggerJobStatusEnum = pgEnum("trigger_job_status", [
   "failed",
   "fallback_resume",
   "fallback_spawn",
+  "fallback_running",
   "callback_pending",
   "callback_retry",
   "callback_delivered",
@@ -47,10 +48,22 @@ export const triggerAttemptResultEnum = pgEnum("trigger_attempt_result", [
   "fallback_resume_succeeded",
   "fallback_resume_failed",
   "fallback_spawned",
+  "fallback_terminal_succeeded",
+  "fallback_terminal_failed",
+  "fallback_terminal_timed_out",
   "callback_post_succeeded",
   "callback_post_deferred",
   "callback_post_failed"
 ]);
+export const fallbackRunStatusEnum = pgEnum("fallback_run_status", [
+  "running",
+  "completed",
+  "failed",
+  "timed_out",
+  "killed",
+  "orphaned"
+]);
+export const fallbackLaunchModeEnum = pgEnum("fallback_launch_mode", ["resume", "spawn"]);
 
 export const threads = pgTable(
   "threads",
@@ -213,6 +226,37 @@ export const triggerAttempts = pgTable(
   ]
 );
 
+export const triggerFallbackRuns = pgTable(
+  "trigger_fallback_runs",
+  {
+    triggerId: text("trigger_id")
+      .primaryKey()
+      .references(() => triggerJobs.triggerId, { onDelete: "cascade" }),
+    workspaceId: text("workspace_id").notNull(),
+    threadId: text("thread_id")
+      .notNull()
+      .references(() => threads.threadId, { onDelete: "cascade" }),
+    targetAgentId: text("target_agent_id").notNull(),
+    launchMode: fallbackLaunchModeEnum("launch_mode").notNull(),
+    pid: integer("pid").notNull(),
+    status: fallbackRunStatusEnum("status").notNull().default("running"),
+    startedAt: timestamp("started_at", { withTimezone: true }).notNull(),
+    deadlineAt: timestamp("deadline_at", { withTimezone: true }).notNull(),
+    endedAt: timestamp("ended_at", { withTimezone: true }),
+    exitCode: integer("exit_code"),
+    errorCode: text("error_code"),
+    details: jsonb("details"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow()
+  },
+  (table) => [
+    index("trigger_fallback_runs_workspace_idx").on(table.workspaceId),
+    index("trigger_fallback_runs_status_idx").on(table.status),
+    index("trigger_fallback_runs_workspace_status_idx").on(table.workspaceId, table.status),
+    index("trigger_fallback_runs_thread_idx").on(table.threadId)
+  ]
+);
+
 export const auditEvents = pgTable(
   "audit_events",
   {
@@ -278,13 +322,28 @@ export const triggerJobsRelations = relations(triggerJobs, ({ one, many }) => ({
     fields: [triggerJobs.threadId],
     references: [threads.threadId]
   }),
-  attempts: many(triggerAttempts)
+  attempts: many(triggerAttempts),
+  fallbackRun: one(triggerFallbackRuns, {
+    fields: [triggerJobs.triggerId],
+    references: [triggerFallbackRuns.triggerId]
+  })
 }));
 
 export const triggerAttemptsRelations = relations(triggerAttempts, ({ one }) => ({
   trigger: one(triggerJobs, {
     fields: [triggerAttempts.triggerId],
     references: [triggerJobs.triggerId]
+  })
+}));
+
+export const triggerFallbackRunsRelations = relations(triggerFallbackRuns, ({ one }) => ({
+  trigger: one(triggerJobs, {
+    fields: [triggerFallbackRuns.triggerId],
+    references: [triggerJobs.triggerId]
+  }),
+  thread: one(threads, {
+    fields: [triggerFallbackRuns.threadId],
+    references: [threads.threadId]
   })
 }));
 

@@ -83,6 +83,8 @@ Operator CLI baseline (MVP):
 - `get-escalation-owner --thread-id <id>` to read current escalation owner state.
 - `unblock-thread --thread-id <id> --reason <text>` to transition a thread back to `active`.
 - `override-close-thread --thread-id <id> --reason <human_override:...>` for explicit close overrides.
+- `fallback-list [--status running|all] [--limit <n>]` to inspect fallback execution inventory.
+- `fallback-kill (--trigger-id <id> | --thread-id <id>) --reason <text>` to terminate running fallback executions and queue terminal callback handling.
 - All mutable operations append audit events with operator actor identity.
 
 ## 3.2 Observability
@@ -94,6 +96,7 @@ Metrics:
 - escalations per day
 - loop-detection trigger count
 - wake attempts by result (`triggered`, `already_active`, `failed`, `fallback_spawned`)
+- fallback run states (`running`, `completed`, `timed_out`, `killed`, `orphaned`)
 - API request counters and cumulative duration exported from `/metrics`
 
 Logs:
@@ -143,6 +146,10 @@ Default hybrid policy (MVP):
 - resume attempts before spawn: 2
 - stale session cutoff before spawn: `>12h` heartbeat gap
 - worker min claim cutoff timestamp: unset by default (local-safe profile sets startup timestamp)
+- fallback execution timeout: 900000ms (15m)
+- fallback kill grace window: 5000ms
+- fallback max active (global): 8
+- fallback max active (per agent): 2
 
 ## 3.4 Local Development Guardrails
 Local guardrails to avoid accidental queue replay and background fanout during iterative testing:

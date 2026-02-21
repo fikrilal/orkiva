@@ -117,6 +117,7 @@ export class UnreadTriggerJobScheduler {
 
   public async schedule(input: ScheduleUnreadCandidatesInput): Promise<ScheduleUnreadCandidatesResult> {
     const scheduledAt = input.scheduledAt ?? new Date();
+    const scheduledAtMs = scheduledAt.getTime();
     const pendingJobCount = input.pendingJobs;
     const breakerWasOpen = this.isBreakerOpen(scheduledAt);
     if (
@@ -173,7 +174,7 @@ export class UnreadTriggerJobScheduler {
       reason: "new_unread_dormant_participant",
       threadIds,
       targetAgentIds,
-      since: new Date(scheduledAt.getTime() - this.guardConfig.windowMs)
+      since: new Date(scheduledAtMs - this.guardConfig.windowMs)
     });
     const recentActivityByParticipant = new Map<string, Date[]>();
     for (const job of recentJobs) {
@@ -202,13 +203,13 @@ export class UnreadTriggerJobScheduler {
       const latestActivity = recentActivity[0];
       if (
         latestActivity !== undefined &&
-        scheduledAt.getTime() - latestActivity.getTime() < this.guardConfig.minIntervalMs
+        scheduledAtMs - latestActivity.getTime() < this.guardConfig.minIntervalMs
       ) {
         suppressedByBudget += 1;
         continue;
       }
       const recentCountInWindow = recentActivity.filter(
-        (eventAt) => scheduledAt.getTime() - eventAt.getTime() <= this.guardConfig.windowMs
+        (eventAt) => scheduledAtMs - eventAt.getTime() <= this.guardConfig.windowMs
       ).length;
       if (recentCountInWindow >= this.guardConfig.maxTriggersPerWindow) {
         suppressedByBudget += 1;

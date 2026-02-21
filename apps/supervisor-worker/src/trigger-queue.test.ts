@@ -23,6 +23,7 @@ const queuedJob = (input: {
     | "deferred"
     | "fallback_resume"
     | "fallback_spawn"
+    | "fallback_running"
     | "callback_pending"
     | "callback_retry";
   nextRetryAt?: Date | null;
@@ -185,7 +186,9 @@ describe("trigger queue processing", () => {
       execute: () =>
         Promise.resolve({
           attemptResult: "fallback_resume_succeeded",
-          nextStatus: "fallback_resume"
+          nextStatus: "fallback_resume",
+          launchMode: "resume",
+          pid: 4201
         })
     };
     const processor = new TriggerQueueProcessor(store, executor, fallbackExecutor, {
@@ -232,7 +235,9 @@ describe("trigger queue processing", () => {
       execute: () =>
         Promise.resolve({
           attemptResult: "fallback_spawned",
-          nextStatus: "fallback_spawn"
+          nextStatus: "fallback_spawn",
+          launchMode: "spawn",
+          pid: 4202
         })
     };
     const processor = new TriggerQueueProcessor(store, executor, fallbackExecutor, {
@@ -263,6 +268,75 @@ describe("trigger queue processing", () => {
     expect(second.claimedJobs).toBe(1);
     expect(second.fallbackSpawned).toBe(0);
     expect(second.callbackFailed).toBe(1);
+  });
+
+  it("defers fallback execution when active fallback concurrency guardrails are hit", async () => {
+    const store = new InMemoryTriggerQueueStore([
+      queuedJob({
+        triggerId: "trg_concurrency_01",
+        maxRetries: 0,
+        status: "fallback_spawn"
+      })
+    ]);
+    await store.upsertFallbackRun({
+      triggerId: "trg_other_running_01",
+      workspaceId: "wk_01",
+      threadId: "th_other",
+      targetAgentId: "reviewer_agent",
+      launchMode: "spawn",
+      pid: 55554,
+      startedAt: new Date("2026-02-18T10:00:00.000Z"),
+      deadlineAt: new Date("2026-02-18T10:20:00.000Z")
+    });
+    const execute = vi.fn<TriggerFallbackExecutor["execute"]>(() =>
+      Promise.resolve({
+        attemptResult: "fallback_spawned",
+        nextStatus: "fallback_spawn",
+        launchMode: "spawn",
+        pid: 9876
+      })
+    );
+    const processor = new TriggerQueueProcessor(
+      store,
+      {
+        execute: vi.fn(() =>
+          Promise.resolve({
+            attemptResult: "delivered",
+            retryable: false
+          } satisfies TriggerExecutionOutcome)
+        )
+      },
+      { execute },
+      {
+        deferRecheckMs: 5000,
+        rateLimitPerMinute: 10,
+        loopMaxTurns: 20,
+        loopMaxRepeatedFindings: 3
+      },
+      2000,
+      60000,
+      undefined,
+      8000,
+      45000,
+      3,
+      undefined,
+      undefined,
+      900000,
+      5000,
+      1,
+      1
+    );
+
+    const result = await processor.processDueJobs({
+      workspaceId: "wk_01",
+      limit: 10,
+      processedAt: new Date("2026-02-18T10:01:00.000Z")
+    });
+
+    expect(result.retried).toBe(1);
+    expect(execute).toHaveBeenCalledTimes(0);
+    const job = await store.getJobById("trg_concurrency_01");
+    expect(job?.status).toBe("deferred");
   });
 
   it("applies per-thread+agent rate limits with deferred retries", async () => {
@@ -625,6 +699,131 @@ describe("trigger queue processing", () => {
     expect(result.callbackDelivered).toBe(1);
     const final = await store.getJobById(job.triggerId);
     expect(final?.status).toBe("callback_delivered");
+  });
+
+  it("moves dispatch callbacks into fallback_running instead of callback_delivered", async () => {
+    const triggerId = "trg_dispatch_only_01";
+    const job = queuedJob({
+      triggerId,
+      maxRetries: 0,
+      status: "callback_pending",
+      attempts: 1
+    });
+    const store = new InMemoryTriggerQueueStore([job]);
+    (
+      store as unknown as {
+        attemptsByTrigger: Map<string, Array<Record<string, unknown>>>;
+      }
+    ).attemptsByTrigger.set(triggerId, [
+      {
+        attemptNo: 1,
+        attemptResult: "fallback_spawned",
+        createdAt: new Date("2026-02-18T10:00:00.000Z")
+      }
+    ]);
+    await store.upsertFallbackRun({
+      triggerId,
+      workspaceId: "wk_01",
+      threadId: "th_01",
+      targetAgentId: "reviewer_agent",
+      launchMode: "spawn",
+      pid: 55555,
+      startedAt: new Date("2026-02-18T10:00:00.000Z"),
+      deadlineAt: new Date("2026-02-18T10:20:00.000Z")
+    });
+
+    const callbackExecutor = {
+      execute: vi.fn(() =>
+        Promise.resolve({
+          attemptResult: "callback_post_succeeded",
+          retryable: false
+        } as const)
+      )
+    };
+    const processor = new TriggerQueueProcessor(
+      store,
+      {
+        execute: vi.fn(() =>
+          Promise.resolve({
+            attemptResult: "delivered",
+            retryable: false
+          } satisfies TriggerExecutionOutcome)
+        )
+      },
+      new NoopTriggerFallbackExecutor(),
+      {
+        deferRecheckMs: 5000,
+        rateLimitPerMinute: 10,
+        loopMaxTurns: 20,
+        loopMaxRepeatedFindings: 3
+      },
+      2000,
+      60000,
+      undefined,
+      8000,
+      45000,
+      3,
+      callbackExecutor
+    );
+
+    const result = await processor.processDueJobs({
+      workspaceId: "wk_01",
+      limit: 10,
+      processedAt: new Date("2026-02-18T10:01:00.000Z")
+    });
+
+    expect(result.callbackDelivered).toBe(1);
+    const final = await store.getJobById(triggerId);
+    expect(final?.status).toBe("fallback_running");
+    expect(callbackExecutor.execute).toHaveBeenCalledWith(
+      expect.objectContaining({
+        callbackType: "dispatch"
+      })
+    );
+  });
+
+  it("reconciles dead fallback-running process into terminal callback queue", async () => {
+    const triggerId = "trg_reconcile_terminal_01";
+    const store = new InMemoryTriggerQueueStore([
+      queuedJob({
+        triggerId,
+        maxRetries: 2,
+        status: "fallback_running",
+        attempts: 1
+      })
+    ]);
+    await store.upsertFallbackRun({
+      triggerId,
+      workspaceId: "wk_01",
+      threadId: "th_01",
+      targetAgentId: "reviewer_agent",
+      launchMode: "spawn",
+      pid: 999999,
+      startedAt: new Date("2026-02-18T10:00:00.000Z"),
+      deadlineAt: new Date("2026-02-18T10:10:00.000Z")
+    });
+
+    const processor = new TriggerQueueProcessor(store, {
+      execute: vi.fn(() =>
+        Promise.resolve({
+          attemptResult: "delivered",
+          retryable: false
+        } satisfies TriggerExecutionOutcome)
+      )
+    });
+
+    const reconciliation = await processor.reconcileFallbackRuns({
+      workspaceId: "wk_01",
+      limit: 10,
+      processedAt: new Date("2026-02-18T10:01:00.000Z")
+    });
+
+    expect(reconciliation.scanned).toBe(1);
+    expect(reconciliation.queuedForCompletion).toBe(1);
+    const job = await store.getJobById(triggerId);
+    expect(job?.status).toBe("callback_pending");
+    const attempts = store.getAttemptsByTrigger(triggerId);
+    expect(attempts.at(-1)?.attemptResult).toBe("fallback_terminal_succeeded");
   });
 
   it("reclaims stale triggering jobs into callback retry path when execution already succeeded", async () => {

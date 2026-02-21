@@ -39,6 +39,7 @@ describe("BridgeTriggerCallbackExecutor", () => {
     const result = await executor.execute({
       job: baseJob(),
       attemptNo: 3,
+      callbackType: "completed",
       triggerOutcome,
       now: new Date("2026-02-21T08:02:00.000Z")
     });
@@ -75,6 +76,7 @@ describe("BridgeTriggerCallbackExecutor", () => {
     const result = await executor.execute({
       job: baseJob(),
       attemptNo: 3,
+      callbackType: "dispatch",
       triggerOutcome,
       now: new Date("2026-02-21T08:02:00.000Z")
     });
@@ -102,8 +104,9 @@ describe("BridgeTriggerCallbackExecutor", () => {
       kind: string;
     };
     expect(body.kind).toBe("event");
-    expect(body.idempotency_key).toBe("trigger-callback:trg_callback_01:v1");
-    expect(body.metadata["event_type"]).toBe("trigger.completed");
+    expect(body.idempotency_key).toBe("trigger-callback:trg_callback_01:dispatch:v1");
+    expect(body.metadata["event_type"]).toBe("trigger.dispatched");
+    expect(body.metadata["callback_type"]).toBe("dispatch");
     expect(body.metadata["suppress_auto_trigger"]).toBe(true);
     expect(body.metadata["trigger_outcome"]).toBe("fallback_spawned");
   });
@@ -129,6 +132,7 @@ describe("BridgeTriggerCallbackExecutor", () => {
     const result = await executor.execute({
       job: baseJob(),
       attemptNo: 3,
+      callbackType: "completed",
       triggerOutcome,
       now: new Date("2026-02-21T08:02:00.000Z")
     });
@@ -161,6 +165,7 @@ describe("BridgeTriggerCallbackExecutor", () => {
     const result = await executor.execute({
       job: baseJob(),
       attemptNo: 3,
+      callbackType: "completed",
       triggerOutcome,
       now: new Date("2026-02-21T08:02:00.000Z")
     });

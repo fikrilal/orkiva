@@ -4,6 +4,7 @@ import { parseOperatorCommand } from "./commands.js";
 import {
   OperatorCliError,
   OperatorCliService,
+  type FallbackRunSummaryRecord,
   type OperatorRepository,
   type ThreadMessageRecord,
   type ThreadRecord,
@@ -21,17 +22,22 @@ class InMemoryOperatorRepository implements OperatorRepository {
   private readonly participants = new Map<string, string[]>();
   private readonly messages = new Map<string, ThreadMessageRecord[]>();
   private readonly jobs = new Map<string, TriggerJobSummaryRecord[]>();
+  private readonly fallbackRuns = new Map<string, FallbackRunSummaryRecord>();
 
   public seed(input: {
     thread: ThreadRecord;
     participants?: string[];
     messages?: ThreadMessageRecord[];
     jobs?: TriggerJobSummaryRecord[];
+    fallbackRuns?: FallbackRunSummaryRecord[];
   }): void {
     this.threads.set(input.thread.threadId, input.thread);
     this.participants.set(input.thread.threadId, input.participants ?? []);
     this.messages.set(input.thread.threadId, input.messages ?? []);
     this.jobs.set(input.thread.threadId, input.jobs ?? []);
+    for (const run of input.fallbackRuns ?? []) {
+      this.fallbackRuns.set(run.triggerId, run);
+    }
   }
 
   public getThreadById(threadId: string): Promise<ThreadRecord | null> {
@@ -51,6 +57,22 @@ class InMemoryOperatorRepository implements OperatorRepository {
     limit: number
   ): Promise<readonly TriggerJobSummaryRecord[]> {
     return Promise.resolve((this.jobs.get(threadId) ?? []).slice(0, limit));
+  }
+
+  public listFallbackRuns(input: {
+    workspaceId: string;
+    status: "running" | "all";
+    limit: number;
+    triggerId?: string;
+    threadId?: string;
+  }): Promise<readonly FallbackRunSummaryRecord[]> {
+    const runs = [...this.fallbackRuns.values()]
+      .filter((run) => run.workspaceId === input.workspaceId)
+      .filter((run) => (input.status === "running" ? run.status === "running" : true))
+      .filter((run) => (input.triggerId === undefined ? true : run.triggerId === input.triggerId))
+      .filter((run) => (input.threadId === undefined ? true : run.threadId === input.threadId))
+      .slice(0, input.limit);
+    return Promise.resolve(runs);
   }
 
   public updateThreadStatus(input: {
@@ -141,6 +163,30 @@ class InMemoryOperatorRepository implements OperatorRepository {
     });
     return Promise.resolve();
   }
+
+  public completeFallbackRunByOperator(input: {
+    triggerId: string;
+    workspaceId: string;
+    transitionedAt: Date;
+    completedStatus: "killed" | "orphaned";
+    errorCode: string;
+    details: Record<string, unknown>;
+  }): Promise<boolean> {
+    void input.transitionedAt;
+    void input.errorCode;
+    void input.details;
+    const run = this.fallbackRuns.get(input.triggerId);
+    if (run === undefined || run.workspaceId !== input.workspaceId || run.status !== "running") {
+      return Promise.resolve(false);
+    }
+    this.fallbackRuns.set(input.triggerId, {
+      ...run,
+      status: input.completedStatus,
+      endedAt: new Date("2026-02-18T12:00:01.000Z"),
+      errorCode: "OPERATOR_TERMINATED_FALLBACK"
+    });
+    return Promise.resolve(true);
+  }
 }
 
 describe("operator-cli parser", () => {
@@ -186,6 +232,34 @@ describe("operator-cli parser", () => {
       ownerAgentId: "reviewer_agent",
       reason: "manual_assignment:critical",
       actorAgentId: "coordinator_agent",
+      json: false
+    });
+  });
+
+  it("parses fallback-list command", () => {
+    const parsed = parseOperatorCommand(["fallback-list", "--status", "all", "--limit", "10"]);
+    expect(parsed).toEqual({
+      kind: "fallback-list",
+      status: "all",
+      limit: 10,
+      json: false
+    });
+  });
+
+  it("parses fallback-kill command with trigger selector", () => {
+    const parsed = parseOperatorCommand([
+      "fallback-kill",
+      "--trigger-id",
+      "trg_01",
+      "--reason",
+      "manual_kill:test"
+    ]);
+    expect(parsed).toEqual({
+      kind: "fallback-kill",
+      triggerId: "trg_01",
+      threadId: null,
+      reason: "manual_kill:test",
+      actorAgentId: "human_operator",
       json: false
     });
   });
@@ -247,6 +321,73 @@ describe("operator-cli service", () => {
     expect(result.data["participants"]).toEqual(["executioner_agent", "reviewer_agent"]);
     expect(result.data["recent_messages"]).toHaveLength(1);
     expect(result.data["recent_trigger_jobs"]).toHaveLength(1);
+  });
+
+  it("lists running fallback runs", async () => {
+    const repo = new InMemoryOperatorRepository();
+    repo.seed({
+      thread: seedThread(),
+      fallbackRuns: [
+        {
+          triggerId: "trg_run_01",
+          threadId: "th_01",
+          workspaceId: "wk_01",
+          targetAgentId: "executioner_agent",
+          launchMode: "spawn",
+          pid: 2222,
+          status: "running",
+          startedAt: now,
+          deadlineAt: new Date("2026-02-18T12:30:00.000Z"),
+          endedAt: null,
+          errorCode: null
+        }
+      ]
+    });
+    const service = new OperatorCliService(repo, "wk_01", () => now);
+    const result = await service.execute({
+      kind: "fallback-list",
+      status: "running",
+      limit: 10,
+      json: true
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.data["count"]).toBe(1);
+  });
+
+  it("kills matching fallback run and queues completion transition", async () => {
+    const repo = new InMemoryOperatorRepository();
+    repo.seed({
+      thread: seedThread(),
+      fallbackRuns: [
+        {
+          triggerId: "trg_run_kill_01",
+          threadId: "th_01",
+          workspaceId: "wk_01",
+          targetAgentId: "executioner_agent",
+          launchMode: "spawn",
+          pid: 999999,
+          status: "running",
+          startedAt: now,
+          deadlineAt: new Date("2026-02-18T12:30:00.000Z"),
+          endedAt: null,
+          errorCode: null
+        }
+      ]
+    });
+    const service = new OperatorCliService(repo, "wk_01", () => now, 10);
+    const result = await service.execute({
+      kind: "fallback-kill",
+      triggerId: "trg_run_kill_01",
+      threadId: null,
+      reason: "manual_kill:test",
+      actorAgentId: "human_operator",
+      json: true
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.data["matched"]).toBe(1);
+    expect(result.data["transitioned"]).toBe(1);
   });
 
   it("escalates active thread to blocked and records audit", async () => {

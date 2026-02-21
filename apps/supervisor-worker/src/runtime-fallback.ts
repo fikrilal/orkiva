@@ -14,18 +14,19 @@ export interface CodexFallbackConfig {
   staleAfterHours: number;
   crashLoopThreshold: number;
   crashLoopWindowMs: number;
+  allowDangerousBypass: boolean;
 }
 
 const DEFAULT_CODEX_FALLBACK_CONFIG: CodexFallbackConfig = {
   resumeMaxAttempts: 2,
   staleAfterHours: 12,
   crashLoopThreshold: 3,
-  crashLoopWindowMs: 15 * 60 * 1000
+  crashLoopWindowMs: 15 * 60 * 1000,
+  allowDangerousBypass: false
 };
 
-const codexFullPermissionArgs = (): string[] => [
-  "--dangerously-bypass-approvals-and-sandbox"
-];
+const codexPermissionArgs = (allowDangerousBypass: boolean): string[] =>
+  allowDangerousBypass ? ["--dangerously-bypass-approvals-and-sandbox"] : [];
 
 export class CodexFallbackExecutor implements TriggerFallbackExecutor {
   private readonly recentResumeFailuresByAgent = new Map<string, Date[]>();
@@ -94,7 +95,7 @@ export class CodexFallbackExecutor implements TriggerFallbackExecutor {
   }
 
   private async startCommand(input: CommandExecutionInput): Promise<
-    | { started: true; details: Record<string, unknown> }
+    | { started: true; pid?: number; details: Record<string, unknown> }
     | {
         started: false;
         details: Record<string, unknown>;
@@ -105,6 +106,7 @@ export class CodexFallbackExecutor implements TriggerFallbackExecutor {
       if (launched.started) {
         return {
           started: true,
+          ...(launched.pid === undefined ? {} : { pid: launched.pid }),
           details: {
             launch_mode: "detached",
             ...(launched.pid === undefined ? {} : { pid: launched.pid })
@@ -146,12 +148,14 @@ export class CodexFallbackExecutor implements TriggerFallbackExecutor {
     const spawnPrompt = `[THREAD_SUMMARY thread=${job.threadId}] ${job.prompt}`;
     const spawnResult = await this.startCommand({
       command: "codex",
-      args: [...codexFullPermissionArgs(), "exec", spawnPrompt]
+      args: [...codexPermissionArgs(this.config.allowDangerousBypass), "exec", spawnPrompt]
     });
     if (spawnResult.started) {
       return {
         attemptResult: "fallback_spawned",
         nextStatus: "fallback_spawn",
+        launchMode: "spawn",
+        ...(spawnResult.pid === undefined ? {} : { pid: spawnResult.pid }),
         details: {
           command: "codex exec <thread_summary_prompt>",
           ...spawnResult.details
@@ -190,7 +194,7 @@ export class CodexFallbackExecutor implements TriggerFallbackExecutor {
         const resumeResult = await this.startCommand({
           command: "codex",
           args: [
-            ...codexFullPermissionArgs(),
+            ...codexPermissionArgs(this.config.allowDangerousBypass),
             "exec",
             "resume",
             targetSessionId,
@@ -201,6 +205,8 @@ export class CodexFallbackExecutor implements TriggerFallbackExecutor {
           return {
             attemptResult: "fallback_resume_succeeded",
             nextStatus: "fallback_resume",
+            launchMode: "resume",
+            ...(resumeResult.pid === undefined ? {} : { pid: resumeResult.pid }),
             details: {
               resumeAttempt,
               resumeMaxAttempts: this.config.resumeMaxAttempts,

@@ -104,6 +104,7 @@ const createOperationMetrics = (
 const createTestApp = (): FastifyInstance => {
   let idCounter = 0;
   return createBridgeApiApp({
+    workspaceId: "wk_01",
     threadStore: new InMemoryThreadStore(),
     sessionStore: new InMemorySessionStore(),
     triggerStore: new InMemoryTriggerStore(),

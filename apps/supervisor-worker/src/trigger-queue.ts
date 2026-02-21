@@ -1,5 +1,5 @@
 import type { DbClient } from "@orkiva/db";
-import { threads, triggerAttempts, triggerJobs } from "@orkiva/db";
+import { triggerFallbackRuns, threads, triggerAttempts, triggerJobs } from "@orkiva/db";
 import { extractRequestIdFromTriggerId } from "@orkiva/protocol";
 import { and, asc, eq, gte, inArray, isNull, lte, or } from "drizzle-orm";
 
@@ -12,6 +12,7 @@ export type TriggerJobStatus =
   | "failed"
   | "fallback_resume"
   | "fallback_spawn"
+  | "fallback_running"
   | "callback_pending"
   | "callback_retry"
   | "callback_delivered"
@@ -25,9 +26,15 @@ export type TriggerAttemptResult =
   | "fallback_resume_succeeded"
   | "fallback_resume_failed"
   | "fallback_spawned"
+  | "fallback_terminal_succeeded"
+  | "fallback_terminal_failed"
+  | "fallback_terminal_timed_out"
   | "callback_post_succeeded"
   | "callback_post_deferred"
   | "callback_post_failed";
+
+export type FallbackLaunchMode = "resume" | "spawn";
+export type FallbackRunStatus = "running" | "completed" | "failed" | "timed_out" | "killed" | "orphaned";
 
 const CALLBACK_ATTEMPT_RESULTS: readonly TriggerAttemptResult[] = [
   "callback_post_succeeded",
@@ -67,6 +74,24 @@ export interface TriggerJobRecord {
   updatedAt: Date;
 }
 
+export interface FallbackRunRecord {
+  triggerId: string;
+  workspaceId: string;
+  threadId: string;
+  targetAgentId: string;
+  launchMode: FallbackLaunchMode;
+  pid: number;
+  status: FallbackRunStatus;
+  startedAt: Date;
+  deadlineAt: Date;
+  endedAt: Date | null;
+  exitCode: number | null;
+  errorCode: string | null;
+  details: Record<string, unknown> | null;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
 export interface CreateOrReuseTriggerJobInput {
   triggerId: string;
   threadId: string;
@@ -102,6 +127,7 @@ export const PENDING_TRIGGER_JOB_STATUSES: readonly TriggerJobStatus[] = [
   "timeout",
   "fallback_resume",
   "fallback_spawn",
+  "fallback_running",
   "callback_pending",
   "callback_retry"
 ];
@@ -146,6 +172,40 @@ const toTriggerJobRecord = (row: {
   updatedAt: row.updatedAt
 });
 
+const toFallbackRunRecord = (row: {
+  triggerId: string;
+  workspaceId: string;
+  threadId: string;
+  targetAgentId: string;
+  launchMode: FallbackLaunchMode;
+  pid: number;
+  status: FallbackRunStatus;
+  startedAt: Date;
+  deadlineAt: Date;
+  endedAt: Date | null;
+  exitCode: number | null;
+  errorCode: string | null;
+  details: Record<string, unknown> | null;
+  createdAt: Date;
+  updatedAt: Date;
+}): FallbackRunRecord => ({
+  triggerId: row.triggerId,
+  workspaceId: row.workspaceId,
+  threadId: row.threadId,
+  targetAgentId: row.targetAgentId,
+  launchMode: row.launchMode,
+  pid: row.pid,
+  status: row.status,
+  startedAt: row.startedAt,
+  deadlineAt: row.deadlineAt,
+  endedAt: row.endedAt,
+  exitCode: row.exitCode,
+  errorCode: row.errorCode,
+  details: row.details,
+  createdAt: row.createdAt,
+  updatedAt: row.updatedAt
+});
+
 export interface TriggerQueueStore {
   listPendingJobs(input: ListPendingTriggerJobsInput): Promise<readonly TriggerJobRecord[]>;
   listRecentAutoTriggerJobs(input: {
@@ -184,6 +244,36 @@ export interface TriggerQueueStore {
   getCallbackAttemptCount(triggerId: string): Promise<number>;
   getLatestTriggerExecutionAttempt(triggerId: string): Promise<TriggerAttemptRecord | null>;
   markThreadBlocked(input: { threadId: string; blockedAt: Date; reason: string }): Promise<boolean>;
+  upsertFallbackRun(input: {
+    triggerId: string;
+    workspaceId: string;
+    threadId: string;
+    targetAgentId: string;
+    launchMode: FallbackLaunchMode;
+    pid: number;
+    startedAt: Date;
+    deadlineAt: Date;
+    details?: Record<string, unknown>;
+  }): Promise<FallbackRunRecord>;
+  getFallbackRun(triggerId: string): Promise<FallbackRunRecord | null>;
+  countRunningFallbackRuns(input: {
+    workspaceId: string;
+    targetAgentId?: string;
+  }): Promise<number>;
+  listRunningFallbackRuns(input: {
+    workspaceId: string;
+    limit: number;
+  }): Promise<readonly FallbackRunRecord[]>;
+  completeFallbackRunAndQueueCallback(input: {
+    triggerId: string;
+    expectedRunStatus: FallbackRunStatus;
+    completedStatus: Exclude<FallbackRunStatus, "running">;
+    attemptResult: TriggerAttemptResult;
+    transitionedAt: Date;
+    errorCode?: string;
+    exitCode?: number | null;
+    details?: Record<string, unknown>;
+  }): Promise<boolean>;
 }
 
 const toTransitionStatusForRetry = (attemptResult: TriggerAttemptResult): TriggerJobStatus => {
@@ -254,6 +344,8 @@ export interface TriggerExecutionOutcome {
 export interface TriggerFallbackOutcome {
   attemptResult: "fallback_resume_succeeded" | "fallback_resume_failed" | "fallback_spawned";
   nextStatus: TriggerJobStatus;
+  launchMode?: FallbackLaunchMode;
+  pid?: number;
   errorCode?: string;
   details?: Record<string, unknown>;
 }
@@ -287,6 +379,7 @@ export interface TriggerCallbackExecutor {
   execute(input: {
     job: TriggerJobRecord;
     attemptNo: number;
+    callbackType: "dispatch" | "completed";
     triggerOutcome: TriggerAttemptRecord | null;
     now: Date;
   }): Promise<TriggerCallbackOutcome>;
@@ -334,6 +427,7 @@ export class NoopTriggerCallbackExecutor implements TriggerCallbackExecutor {
   public execute(input: {
     job: TriggerJobRecord;
     attemptNo: number;
+    callbackType: "dispatch" | "completed";
     triggerOutcome: TriggerAttemptRecord | null;
     now: Date;
   }): Promise<TriggerCallbackOutcome> {
@@ -360,7 +454,22 @@ export interface TriggerQueueProcessingResult {
   callbackRetried: number;
   callbackFailed: number;
   autoBlocked: number;
+  fallbackRunsScanned: number;
+  fallbackRunsQueuedForCompletion: number;
+  fallbackRunsTimedOut: number;
+  fallbackRunsKilled: number;
+  fallbackRunsOrphaned: number;
   deadLetterJobIds: readonly string[];
+}
+
+export interface FallbackRunReconciliationResult {
+  workspaceId: string;
+  processedAt: Date;
+  scanned: number;
+  queuedForCompletion: number;
+  timedOut: number;
+  killed: number;
+  orphaned: number;
 }
 
 export interface TriggerQueueSafeguardsConfig {
@@ -406,7 +515,11 @@ export class TriggerQueueProcessor {
     private readonly triggeringLeaseTimeoutMs = 45000,
     private readonly callbackMaxRetries = 3,
     private readonly callbackExecutor: TriggerCallbackExecutor = new NoopTriggerCallbackExecutor(),
-    private readonly minJobCreatedAt?: Date
+    private readonly minJobCreatedAt?: Date,
+    private readonly fallbackExecTimeoutMs = 900000,
+    private readonly fallbackKillGraceMs = 5000,
+    private readonly fallbackMaxActiveGlobal = 8,
+    private readonly fallbackMaxActivePerAgent = 2
   ) {}
 
   private timeoutOutcome(input: {
@@ -654,6 +767,164 @@ export class TriggerQueueProcessor {
     return EXECUTION_SUCCESS_ATTEMPT_RESULTS.includes(input.latestExecutionAttempt.attemptResult);
   }
 
+  private isDispatchCallback(input: {
+    triggerOutcome: TriggerAttemptRecord | null;
+    fallbackRun: FallbackRunRecord | null;
+  }): boolean {
+    if (input.triggerOutcome === null || input.fallbackRun === null) {
+      return false;
+    }
+    if (input.fallbackRun.status !== "running") {
+      return false;
+    }
+    return (
+      input.triggerOutcome.attemptResult === "fallback_resume_succeeded" ||
+      input.triggerOutcome.attemptResult === "fallback_spawned"
+    );
+  }
+
+  private isProcessAlive(pid: number): boolean {
+    try {
+      process.kill(pid, 0);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  private sleep(ms: number): Promise<void> {
+    return new Promise((resolve) => {
+      setTimeout(resolve, ms);
+    });
+  }
+
+  private async terminateProcess(pid: number): Promise<boolean> {
+    if (!this.isProcessAlive(pid)) {
+      return true;
+    }
+
+    try {
+      process.kill(pid, "SIGTERM");
+    } catch {
+      return !this.isProcessAlive(pid);
+    }
+
+    const deadline = Date.now() + this.fallbackKillGraceMs;
+    while (Date.now() < deadline) {
+      if (!this.isProcessAlive(pid)) {
+        return true;
+      }
+      await this.sleep(100);
+    }
+
+    if (!this.isProcessAlive(pid)) {
+      return true;
+    }
+
+    try {
+      process.kill(pid, "SIGKILL");
+    } catch {
+      return !this.isProcessAlive(pid);
+    }
+    return !this.isProcessAlive(pid);
+  }
+
+  public async reconcileFallbackRuns(input: {
+    workspaceId: string;
+    limit: number;
+    processedAt?: Date;
+  }): Promise<FallbackRunReconciliationResult> {
+    const processedAt = input.processedAt ?? new Date();
+    const running = await this.store.listRunningFallbackRuns({
+      workspaceId: input.workspaceId,
+      limit: input.limit
+    });
+    let queuedForCompletion = 0;
+    let timedOut = 0;
+    let killed = 0;
+    let orphaned = 0;
+
+    for (const run of running) {
+      const requestId = extractRequestIdFromTriggerId(run.triggerId);
+      const correlationContext: TriggerQueueLogContext = {
+        trigger_id: run.triggerId,
+        ...(requestId === null ? {} : { request_id: requestId }),
+        thread_id: run.threadId,
+        workspace_id: run.workspaceId,
+        target_agent_id: run.targetAgentId
+      };
+      const alive = this.isProcessAlive(run.pid);
+      if (alive && processedAt.getTime() < run.deadlineAt.getTime()) {
+        continue;
+      }
+
+      if (alive && processedAt.getTime() >= run.deadlineAt.getTime()) {
+        const terminated = await this.terminateProcess(run.pid);
+        const completedStatus: Exclude<FallbackRunStatus, "running"> = terminated
+          ? "timed_out"
+          : "killed";
+        const result = await this.store.completeFallbackRunAndQueueCallback({
+          triggerId: run.triggerId,
+          expectedRunStatus: "running",
+          completedStatus,
+          attemptResult: "fallback_terminal_timed_out",
+          transitionedAt: processedAt,
+          errorCode: terminated ? "FALLBACK_EXEC_TIMEOUT" : "FALLBACK_EXEC_KILL_FAILED",
+          details: {
+            pid: run.pid,
+            launch_mode: run.launchMode
+          }
+        });
+        if (result) {
+          queuedForCompletion += 1;
+          timedOut += 1;
+          if (!terminated) {
+            killed += 1;
+          }
+          this.logger?.info("fallback.run.terminalized", {
+            ...correlationContext,
+            terminal_status: completedStatus,
+            attempt_result: "fallback_terminal_timed_out"
+          });
+        }
+        continue;
+      }
+
+      if (!alive) {
+        const result = await this.store.completeFallbackRunAndQueueCallback({
+          triggerId: run.triggerId,
+          expectedRunStatus: "running",
+          completedStatus: "completed",
+          attemptResult: "fallback_terminal_succeeded",
+          transitionedAt: processedAt,
+          details: {
+            pid: run.pid,
+            launch_mode: run.launchMode
+          }
+        });
+        if (result) {
+          queuedForCompletion += 1;
+          orphaned += 1;
+          this.logger?.info("fallback.run.terminalized", {
+            ...correlationContext,
+            terminal_status: "completed",
+            attempt_result: "fallback_terminal_succeeded"
+          });
+        }
+      }
+    }
+
+    return {
+      workspaceId: input.workspaceId,
+      processedAt,
+      scanned: running.length,
+      queuedForCompletion,
+      timedOut,
+      killed,
+      orphaned
+    };
+  }
+
   public async processDueJobs(input: {
     workspaceId: string;
     limit: number;
@@ -713,6 +984,13 @@ export class TriggerQueueProcessor {
         });
       }
       if (effectiveStatus === "callback_pending" || effectiveStatus === "callback_retry") {
+        const fallbackRun = await this.store.getFallbackRun(job.triggerId);
+        const callbackType: "dispatch" | "completed" = this.isDispatchCallback({
+          triggerOutcome: latestExecutionAttempt,
+          fallbackRun
+        })
+          ? "dispatch"
+          : "completed";
         const callbackAttempts = await this.store.getCallbackAttemptCount(job.triggerId);
         const callbackAttemptNo = callbackAttempts + 1;
         const callbackOutcome = await this.runWithTimeout<TriggerCallbackOutcome>({
@@ -723,6 +1001,7 @@ export class TriggerQueueProcessor {
             this.callbackExecutor.execute({
               job,
               attemptNo: callbackAttemptNo,
+              callbackType,
               triggerOutcome: latestExecutionAttempt,
               now: processedAt
             }),
@@ -743,7 +1022,9 @@ export class TriggerQueueProcessor {
           callbackOutcome.retryable && callbackAttemptNo < this.callbackMaxRetries;
         const callbackNextStatus: TriggerJobStatus =
           callbackOutcome.attemptResult === "callback_post_succeeded"
-            ? "callback_delivered"
+            ? callbackType === "dispatch"
+              ? "fallback_running"
+              : "callback_delivered"
             : shouldRetryCallback
               ? this.toCallbackStatusForRetry()
               : "callback_failed";
@@ -759,6 +1040,7 @@ export class TriggerQueueProcessor {
           ...(callbackOutcome.details === undefined ? {} : callbackOutcome.details),
           callback_attempt_no: callbackAttemptNo,
           callback_max_retries: this.callbackMaxRetries,
+          callback_type: callbackType,
           trigger_id: job.triggerId,
           ...(requestId === null ? {} : { request_id: requestId })
         };
@@ -779,6 +1061,7 @@ export class TriggerQueueProcessor {
           ...correlationContext,
           attempt_no: attemptNo,
           callback_attempt_no: callbackAttemptNo,
+          callback_type: callbackType,
           attempt_result: callbackOutcome.attemptResult,
           next_status: callbackNextStatus,
           ...(callbackOutcome.errorCode === undefined
@@ -858,6 +1141,32 @@ export class TriggerQueueProcessor {
             );
 
       if (!shouldRetry && outcome.attemptResult !== "delivered") {
+        const runningGlobal = await this.store.countRunningFallbackRuns({
+          workspaceId: job.workspaceId
+        });
+        const runningPerAgent = await this.store.countRunningFallbackRuns({
+          workspaceId: job.workspaceId,
+          targetAgentId: job.targetAgentId
+        });
+        if (
+          runningGlobal >= this.fallbackMaxActiveGlobal ||
+          runningPerAgent >= this.fallbackMaxActivePerAgent
+        ) {
+          finalOutcome = {
+            attemptResult: "deferred",
+            retryable: true,
+            retryAfterMs: this.safeguards.deferRecheckMs,
+            errorCode: "FALLBACK_CONCURRENCY_LIMIT",
+            details: {
+              running_global: runningGlobal,
+              running_per_agent: runningPerAgent,
+              max_active_global: this.fallbackMaxActiveGlobal,
+              max_active_per_agent: this.fallbackMaxActivePerAgent
+            }
+          };
+          nextStatus = "deferred";
+          nextRetryAt = new Date(processedAt.getTime() + this.safeguards.deferRecheckMs);
+        } else {
         const fallback = await this.runWithTimeout<TriggerFallbackOutcome>({
           phase: "fallback",
           triggerId: job.triggerId,
@@ -902,7 +1211,33 @@ export class TriggerQueueProcessor {
           fallback.attemptResult === "fallback_resume_succeeded" ||
           fallback.attemptResult === "fallback_spawned";
         nextStatus = fallbackCompletedSuccessfully ? "callback_pending" : fallback.nextStatus;
+        if (fallbackCompletedSuccessfully) {
+          if (fallback.pid === undefined || fallback.launchMode === undefined) {
+            finalOutcome = {
+              attemptResult: "fallback_resume_failed",
+              retryable: false,
+              errorCode: "FALLBACK_PID_UNAVAILABLE",
+              details: {
+                ...(fallback.details === undefined ? {} : fallback.details)
+              }
+            };
+            nextStatus = "failed";
+          } else {
+            await this.store.upsertFallbackRun({
+              triggerId: job.triggerId,
+              workspaceId: job.workspaceId,
+              threadId: job.threadId,
+              targetAgentId: job.targetAgentId,
+              launchMode: fallback.launchMode,
+              pid: fallback.pid,
+              startedAt: processedAt,
+              deadlineAt: new Date(processedAt.getTime() + this.fallbackExecTimeoutMs),
+              ...(fallback.details === undefined ? {} : { details: fallback.details })
+            });
+          }
+        }
         nextRetryAt = null;
+        }
       }
 
       const loopGuard = this.updateLoopState({
@@ -969,7 +1304,11 @@ export class TriggerQueueProcessor {
         if (finalOutcome.attemptResult === "fallback_spawned") {
           fallbackSpawned += 1;
         }
-      } else if (shouldRetry && finalOutcome.attemptResult !== "fallback_resume_failed") {
+      } else if (
+        nextStatus === "deferred" ||
+        nextStatus === "timeout" ||
+        nextStatus === "callback_retry"
+      ) {
         retried += 1;
       } else {
         failed += 1;
@@ -998,6 +1337,11 @@ export class TriggerQueueProcessor {
       callbackRetried,
       callbackFailed,
       autoBlocked,
+      fallbackRunsScanned: 0,
+      fallbackRunsQueuedForCompletion: 0,
+      fallbackRunsTimedOut: 0,
+      fallbackRunsKilled: 0,
+      fallbackRunsOrphaned: 0,
       deadLetterJobIds: deadLetter.map((job) => job.triggerId)
     };
   }
@@ -1009,6 +1353,7 @@ export class InMemoryTriggerQueueStore implements TriggerQueueStore {
   private readonly jobs = new Map<string, TriggerJobRecord>();
   private readonly blockedThreads = new Map<string, { blockedAt: Date; reason: string }>();
   private readonly attemptsByTrigger = new Map<string, TriggerAttemptRecord[]>();
+  private readonly fallbackRuns = new Map<string, FallbackRunRecord>();
 
   public constructor(seedJobs: readonly TriggerJobRecord[] = []) {
     for (const job of seedJobs) {
@@ -1236,6 +1581,129 @@ export class InMemoryTriggerQueueStore implements TriggerQueueStore {
       blockedAt: input.blockedAt,
       reason: input.reason
     });
+    return Promise.resolve(true);
+  }
+
+  public upsertFallbackRun(input: {
+    triggerId: string;
+    workspaceId: string;
+    threadId: string;
+    targetAgentId: string;
+    launchMode: FallbackLaunchMode;
+    pid: number;
+    startedAt: Date;
+    deadlineAt: Date;
+    details?: Record<string, unknown>;
+  }): Promise<FallbackRunRecord> {
+    const current = this.fallbackRuns.get(input.triggerId);
+    const createdAt = current?.createdAt ?? input.startedAt;
+    const updated: FallbackRunRecord = {
+      triggerId: input.triggerId,
+      workspaceId: input.workspaceId,
+      threadId: input.threadId,
+      targetAgentId: input.targetAgentId,
+      launchMode: input.launchMode,
+      pid: input.pid,
+      status: "running",
+      startedAt: input.startedAt,
+      deadlineAt: input.deadlineAt,
+      endedAt: null,
+      exitCode: null,
+      errorCode: null,
+      details: input.details ?? null,
+      createdAt,
+      updatedAt: input.startedAt
+    };
+    this.fallbackRuns.set(input.triggerId, updated);
+    return Promise.resolve({ ...updated });
+  }
+
+  public getFallbackRun(triggerId: string): Promise<FallbackRunRecord | null> {
+    const run = this.fallbackRuns.get(triggerId);
+    return Promise.resolve(run === undefined ? null : { ...run });
+  }
+
+  public countRunningFallbackRuns(input: {
+    workspaceId: string;
+    targetAgentId?: string;
+  }): Promise<number> {
+    const count = [...this.fallbackRuns.values()].filter((run) => {
+      if (run.workspaceId !== input.workspaceId) {
+        return false;
+      }
+      if (run.status !== "running") {
+        return false;
+      }
+      if (input.targetAgentId !== undefined && run.targetAgentId !== input.targetAgentId) {
+        return false;
+      }
+      return true;
+    }).length;
+    return Promise.resolve(count);
+  }
+
+  public listRunningFallbackRuns(input: {
+    workspaceId: string;
+    limit: number;
+  }): Promise<readonly FallbackRunRecord[]> {
+    const runs = [...this.fallbackRuns.values()]
+      .filter((run) => run.workspaceId === input.workspaceId && run.status === "running")
+      .sort((left, right) => left.startedAt.getTime() - right.startedAt.getTime())
+      .slice(0, input.limit)
+      .map((run) => ({ ...run }));
+    return Promise.resolve(runs);
+  }
+
+  public completeFallbackRunAndQueueCallback(input: {
+    triggerId: string;
+    expectedRunStatus: FallbackRunStatus;
+    completedStatus: Exclude<FallbackRunStatus, "running">;
+    attemptResult: TriggerAttemptResult;
+    transitionedAt: Date;
+    errorCode?: string;
+    exitCode?: number | null;
+    details?: Record<string, unknown>;
+  }): Promise<boolean> {
+    const run = this.fallbackRuns.get(input.triggerId);
+    if (run === undefined || run.status !== input.expectedRunStatus) {
+      return Promise.resolve(false);
+    }
+
+    const job = this.jobs.get(input.triggerId);
+    if (job === undefined || job.status !== "fallback_running") {
+      return Promise.resolve(false);
+    }
+
+    const nextAttemptNo = job.attempts + 1;
+    const attempts = this.attemptsByTrigger.get(input.triggerId) ?? [];
+    attempts.push({
+      attemptNo: nextAttemptNo,
+      attemptResult: input.attemptResult,
+      ...(input.errorCode === undefined ? {} : { errorCode: input.errorCode }),
+      ...(input.details === undefined ? {} : { details: input.details }),
+      createdAt: input.transitionedAt
+    });
+    this.attemptsByTrigger.set(input.triggerId, attempts);
+
+    const updatedRun: FallbackRunRecord = {
+      ...run,
+      status: input.completedStatus,
+      endedAt: input.transitionedAt,
+      exitCode: input.exitCode ?? null,
+      errorCode: input.errorCode ?? null,
+      details: input.details ?? run.details,
+      updatedAt: input.transitionedAt
+    };
+    this.fallbackRuns.set(input.triggerId, updatedRun);
+
+    const updatedJob: TriggerJobRecord = {
+      ...job,
+      attempts: nextAttemptNo,
+      status: "callback_pending",
+      nextRetryAt: null,
+      updatedAt: input.transitionedAt
+    };
+    this.jobs.set(input.triggerId, updatedJob);
     return Promise.resolve(true);
   }
 }
@@ -1538,7 +2006,10 @@ export class DbTriggerQueueStore implements TriggerQueueStore {
             "fallback_resume_started",
             "fallback_resume_succeeded",
             "fallback_resume_failed",
-            "fallback_spawned"
+            "fallback_spawned",
+            "fallback_terminal_succeeded",
+            "fallback_terminal_failed",
+            "fallback_terminal_timed_out"
           ])
         ),
       orderBy: (table, operators) => [operators.desc(table.attemptNo)],
@@ -1556,6 +2027,191 @@ export class DbTriggerQueueStore implements TriggerQueueStore {
       ...(first.details === null ? {} : { details: first.details as Record<string, unknown> }),
       createdAt: first.createdAt
     };
+  }
+
+  public async upsertFallbackRun(input: {
+    triggerId: string;
+    workspaceId: string;
+    threadId: string;
+    targetAgentId: string;
+    launchMode: FallbackLaunchMode;
+    pid: number;
+    startedAt: Date;
+    deadlineAt: Date;
+    details?: Record<string, unknown>;
+  }): Promise<FallbackRunRecord> {
+    const inserted = await this.db
+      .insert(triggerFallbackRuns)
+      .values({
+        triggerId: input.triggerId,
+        workspaceId: input.workspaceId,
+        threadId: input.threadId,
+        targetAgentId: input.targetAgentId,
+        launchMode: input.launchMode,
+        pid: input.pid,
+        status: "running",
+        startedAt: input.startedAt,
+        deadlineAt: input.deadlineAt,
+        ...(input.details === undefined ? {} : { details: input.details }),
+        createdAt: input.startedAt,
+        updatedAt: input.startedAt
+      })
+      .onConflictDoUpdate({
+        target: triggerFallbackRuns.triggerId,
+        set: {
+          workspaceId: input.workspaceId,
+          threadId: input.threadId,
+          targetAgentId: input.targetAgentId,
+          launchMode: input.launchMode,
+          pid: input.pid,
+          status: "running",
+          startedAt: input.startedAt,
+          deadlineAt: input.deadlineAt,
+          endedAt: null,
+          exitCode: null,
+          errorCode: null,
+          ...(input.details === undefined ? {} : { details: input.details }),
+          updatedAt: input.startedAt
+        }
+      })
+      .returning();
+    const first = inserted[0];
+    if (first === undefined) {
+      throw new Error(`Failed to upsert fallback run: ${input.triggerId}`);
+    }
+    return toFallbackRunRecord({
+      ...first,
+      details: first.details as Record<string, unknown> | null
+    });
+  }
+
+  public async getFallbackRun(triggerId: string): Promise<FallbackRunRecord | null> {
+    const row = await this.db.query.triggerFallbackRuns.findFirst({
+      where: (table) => eq(table.triggerId, triggerId)
+    });
+    if (row === undefined) {
+      return null;
+    }
+    return toFallbackRunRecord({
+      ...row,
+      details: row.details as Record<string, unknown> | null
+    });
+  }
+
+  public async countRunningFallbackRuns(input: {
+    workspaceId: string;
+    targetAgentId?: string;
+  }): Promise<number> {
+    const rows = await this.db.query.triggerFallbackRuns.findMany({
+      where: (table) =>
+        and(
+          eq(table.workspaceId, input.workspaceId),
+          eq(table.status, "running"),
+          input.targetAgentId === undefined ? undefined : eq(table.targetAgentId, input.targetAgentId)
+        ),
+      columns: {
+        triggerId: true
+      }
+    });
+    return rows.length;
+  }
+
+  public async listRunningFallbackRuns(input: {
+    workspaceId: string;
+    limit: number;
+  }): Promise<readonly FallbackRunRecord[]> {
+    const rows = await this.db.query.triggerFallbackRuns.findMany({
+      where: (table) => and(eq(table.workspaceId, input.workspaceId), eq(table.status, "running")),
+      orderBy: (table) => [asc(table.startedAt)],
+      limit: input.limit
+    });
+    return rows.map((row) =>
+      toFallbackRunRecord({
+        ...row,
+        details: row.details as Record<string, unknown> | null
+      })
+    );
+  }
+
+  public async completeFallbackRunAndQueueCallback(input: {
+    triggerId: string;
+    expectedRunStatus: FallbackRunStatus;
+    completedStatus: Exclude<FallbackRunStatus, "running">;
+    attemptResult: TriggerAttemptResult;
+    transitionedAt: Date;
+    errorCode?: string;
+    exitCode?: number | null;
+    details?: Record<string, unknown>;
+  }): Promise<boolean> {
+    return this.db.transaction(async (tx) => {
+      const runRows = await tx
+        .update(triggerFallbackRuns)
+        .set({
+          status: input.completedStatus,
+          endedAt: input.transitionedAt,
+          ...(input.exitCode === undefined ? {} : { exitCode: input.exitCode }),
+          ...(input.errorCode === undefined ? {} : { errorCode: input.errorCode }),
+          ...(input.details === undefined ? {} : { details: input.details }),
+          updatedAt: input.transitionedAt
+        })
+        .where(
+          and(
+            eq(triggerFallbackRuns.triggerId, input.triggerId),
+            eq(triggerFallbackRuns.status, input.expectedRunStatus)
+          )
+        )
+        .returning({
+          triggerId: triggerFallbackRuns.triggerId
+        });
+      if (runRows.length === 0) {
+        return false;
+      }
+
+      const currentJob = await tx.query.triggerJobs.findFirst({
+        where: (table) => eq(table.triggerId, input.triggerId),
+        columns: {
+          triggerId: true,
+          status: true,
+          attempts: true
+        }
+      });
+      if (currentJob === undefined || currentJob.status !== "fallback_running") {
+        return false;
+      }
+
+      const nextAttemptNo = currentJob.attempts + 1;
+      const updatedJobs = await tx
+        .update(triggerJobs)
+        .set({
+          attempts: nextAttemptNo,
+          status: "callback_pending",
+          nextRetryAt: null,
+          updatedAt: input.transitionedAt
+        })
+        .where(
+          and(
+            eq(triggerJobs.triggerId, input.triggerId),
+            eq(triggerJobs.status, "fallback_running"),
+            eq(triggerJobs.attempts, currentJob.attempts)
+          )
+        )
+        .returning({
+          triggerId: triggerJobs.triggerId
+        });
+      if (updatedJobs.length === 0) {
+        return false;
+      }
+
+      await tx.insert(triggerAttempts).values({
+        triggerId: input.triggerId,
+        attemptNo: nextAttemptNo,
+        result: input.attemptResult,
+        ...(input.errorCode === undefined ? {} : { errorCode: input.errorCode }),
+        ...(input.details === undefined ? {} : { details: input.details }),
+        createdAt: input.transitionedAt
+      });
+      return true;
+    });
   }
 
   public async markThreadBlocked(input: {

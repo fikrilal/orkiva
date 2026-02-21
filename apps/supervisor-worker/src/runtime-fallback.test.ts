@@ -68,6 +68,8 @@ describe("CodexFallbackExecutor", () => {
     expect(result).toEqual({
       attemptResult: "fallback_resume_succeeded",
       nextStatus: "fallback_resume",
+      launchMode: "resume",
+      pid: 1234,
       details: {
         resumeAttempt: 1,
         resumeMaxAttempts: 2,
@@ -75,6 +77,43 @@ describe("CodexFallbackExecutor", () => {
         pid: 1234
       }
     });
+    expect(startDetached).toHaveBeenCalledWith({
+      command: "codex",
+      args: ["exec", "resume", "sess_01", "Read unread and continue."]
+    });
+  });
+
+  it("uses dangerous bypass flag only when explicitly enabled", async () => {
+    const runtimeStore = new InMemoryRuntimeRegistryStore();
+    await seedRuntime(runtimeStore);
+    const startDetached = vi.fn(() =>
+      Promise.resolve({
+        started: true,
+        pid: 5678
+      })
+    );
+    const executor = new CodexFallbackExecutor(
+      runtimeStore,
+      {
+        run: vi.fn(),
+        startDetached
+      },
+      {
+        resumeMaxAttempts: 2,
+        staleAfterHours: 12,
+        crashLoopThreshold: 3,
+        crashLoopWindowMs: 15 * 60 * 1000,
+        allowDangerousBypass: true
+      }
+    );
+
+    await executor.execute({
+      job: baseJob(),
+      attemptNo: 2,
+      initialOutcome,
+      now: new Date("2026-02-18T10:01:00.000Z")
+    });
+
     expect(startDetached).toHaveBeenCalledWith({
       command: "codex",
       args: [
@@ -106,7 +145,8 @@ describe("CodexFallbackExecutor", () => {
         resumeMaxAttempts: 2,
         staleAfterHours: 12,
         crashLoopThreshold: 3,
-        crashLoopWindowMs: 15 * 60 * 1000
+        crashLoopWindowMs: 15 * 60 * 1000,
+        allowDangerousBypass: false
       }
     );
 
@@ -119,6 +159,8 @@ describe("CodexFallbackExecutor", () => {
 
     expect(result.attemptResult).toBe("fallback_spawned");
     expect(result.nextStatus).toBe("fallback_spawn");
+    expect(result.launchMode).toBe("spawn");
+    expect(result.pid).toBe(4321);
     expect(result.details).toEqual({
       resumeSkippedReason: "SESSION_STALE",
       command: "codex exec <thread_summary_prompt>",

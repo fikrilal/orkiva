@@ -119,6 +119,7 @@ const createTestApp = (options?: {
   let idCounter = 0;
 
   return createBridgeApiApp({
+    workspaceId: "wk_01",
     threadStore: options?.threadStore ?? new InMemoryThreadStore(),
     sessionStore: options?.sessionStore ?? new InMemorySessionStore(),
     triggerStore: options?.triggerStore ?? new InMemoryTriggerStore(),
@@ -228,7 +229,7 @@ describe("bridge-api phase 4-8", () => {
         workspace_id: "wk_01",
         title: "Profile mapper review",
         type: "workflow",
-        participants: ["executioner_agent", "reviewer_agent"],
+        participants: ["participant_agent", "reviewer_agent"],
         created_by: "coordinator_agent"
       }
     });

@@ -11,13 +11,15 @@ export interface BridgeTriggerCallbackConfig {
   bridgeApiBaseUrl: string;
   accessToken?: string;
   requestTimeoutMs: number;
-  eventType: string;
+  eventTypeDispatch: string;
+  eventTypeCompleted: string;
 }
 
 const DEFAULT_BRIDGE_TRIGGER_CALLBACK_CONFIG: BridgeTriggerCallbackConfig = {
   bridgeApiBaseUrl: "http://127.0.0.1:3000",
   requestTimeoutMs: 8_000,
-  eventType: "trigger.completed"
+  eventTypeDispatch: "trigger.dispatched",
+  eventTypeCompleted: "trigger.completed"
 };
 
 const isRetryableStatusCode = (statusCode: number): boolean =>
@@ -57,10 +59,14 @@ const outcomeLabel = (triggerOutcome: TriggerAttemptRecord | null): string => {
 
 const buildCallbackBody = (input: {
   job: TriggerJobRecord;
+  callbackType: "dispatch" | "completed";
   triggerOutcome: TriggerAttemptRecord | null;
 }): string => {
   const outcome = outcomeLabel(input.triggerOutcome);
-  return `Worker callback for trigger ${input.job.triggerId}: ${outcome}.`;
+  if (input.callbackType === "dispatch") {
+    return `Worker dispatch callback for trigger ${input.job.triggerId}: ${outcome}.`;
+  }
+  return `Worker completion callback for trigger ${input.job.triggerId}: ${outcome}.`;
 };
 
 export class BridgeTriggerCallbackExecutor implements TriggerCallbackExecutor {
@@ -76,6 +82,7 @@ export class BridgeTriggerCallbackExecutor implements TriggerCallbackExecutor {
   public async execute(input: {
     job: TriggerJobRecord;
     attemptNo: number;
+    callbackType: "dispatch" | "completed";
     triggerOutcome: TriggerAttemptRecord | null;
     now: Date;
   }): Promise<TriggerCallbackOutcome> {
@@ -99,11 +106,15 @@ export class BridgeTriggerCallbackExecutor implements TriggerCallbackExecutor {
       kind: "event" as const,
       body: buildCallbackBody({
         job: input.job,
+        callbackType: input.callbackType,
         triggerOutcome: input.triggerOutcome
       }),
       metadata: {
         event_version: CURRENT_EVENT_VERSION,
-        event_type: this.config.eventType,
+        event_type:
+          input.callbackType === "dispatch"
+            ? this.config.eventTypeDispatch
+            : this.config.eventTypeCompleted,
         suppress_auto_trigger: true,
         trigger_id: input.job.triggerId,
         job_id: input.job.triggerId,
@@ -112,11 +123,12 @@ export class BridgeTriggerCallbackExecutor implements TriggerCallbackExecutor {
         trigger_outcome: outcomeLabel(input.triggerOutcome),
         trigger_attempt_no: input.triggerOutcome?.attemptNo ?? null,
         trigger_error_code: input.triggerOutcome?.errorCode ?? null,
+        callback_type: input.callbackType,
         started_at: input.triggerOutcome?.createdAt.toISOString() ?? null,
         finished_at: input.now.toISOString(),
         callback_attempt_no: input.attemptNo
       },
-      idempotency_key: `trigger-callback:${input.job.triggerId}:v1`
+      idempotency_key: `trigger-callback:${input.job.triggerId}:${input.callbackType}:v1`
     };
 
     const controller = new AbortController();

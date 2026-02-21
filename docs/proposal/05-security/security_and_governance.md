@@ -88,6 +88,11 @@ Token claim baseline:
 ## 5.4 Conflict Handling
 - If two agents attempt incompatible thread state changes, preserve first valid update and return `CONFLICT` for subsequent call.
 
+## 5.5 Runtime Execution Privilege
+- Trigger/fallback prompt payloads are untrusted text and must never imply implicit host privilege escalation.
+- Supervisor fallback execution must default to standard Codex sandbox/approval behavior.
+- Any use of high-privilege bypass flags requires explicit operator configuration and should be treated as an audited exception.
+
 ## 6. Governance Model
 ## 6.1 Ownership
 - Each thread has an owner agent or coordinator.

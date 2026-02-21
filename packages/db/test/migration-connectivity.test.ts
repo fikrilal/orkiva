@@ -33,6 +33,7 @@ describeDb("database migration connectivity", () => {
             'session_registry',
             'trigger_jobs',
             'trigger_attempts',
+            'trigger_fallback_runs',
             'audit_events'
           )`
     );
@@ -46,6 +47,7 @@ describeDb("database migration connectivity", () => {
     expect(actual.has("session_registry")).toBe(true);
     expect(actual.has("trigger_jobs")).toBe(true);
     expect(actual.has("trigger_attempts")).toBe(true);
+    expect(actual.has("trigger_fallback_runs")).toBe(true);
     expect(actual.has("audit_events")).toBe(true);
   });
 });

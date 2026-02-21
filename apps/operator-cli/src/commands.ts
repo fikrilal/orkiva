@@ -50,6 +50,20 @@ export type OperatorCommand =
       reason: string;
       actorAgentId: string;
       json: boolean;
+    }
+  | {
+      kind: "fallback-list";
+      status: "running" | "all";
+      limit: number;
+      json: boolean;
+    }
+  | {
+      kind: "fallback-kill";
+      triggerId: string | null;
+      threadId: string | null;
+      reason: string;
+      actorAgentId: string;
+      json: boolean;
     };
 
 const parseOptions = (argv: readonly string[]): Map<string, string> => {
@@ -120,6 +134,17 @@ const readOptionalBool = (options: Map<string, string>, key: string): boolean =>
   throw new Error(`Option --${key} must be true or false`);
 };
 
+const readOptionalString = (options: Map<string, string>, key: string): string | null => {
+  const value = options.get(key);
+  if (value === undefined) {
+    return null;
+  }
+  if (value.trim().length === 0) {
+    throw new Error(`Option --${key} must not be empty`);
+  }
+  return value;
+};
+
 const readActorAgentId = (options: Map<string, string>): string => {
   const value = options.get("actor-agent-id");
   if (value === undefined) {
@@ -136,7 +161,7 @@ export const parseOperatorCommand = (argv: readonly string[]): OperatorCommand =
   const [commandName, ...rest] = argv;
   if (commandName === undefined) {
     throw new Error(
-      "Missing command. Expected inspect-thread | escalate-thread | unblock-thread | assign-escalation-owner | reassign-escalation-owner | get-escalation-owner | override-close-thread"
+      "Missing command. Expected inspect-thread | escalate-thread | unblock-thread | assign-escalation-owner | reassign-escalation-owner | get-escalation-owner | override-close-thread | fallback-list | fallback-kill"
     );
   }
 
@@ -209,6 +234,35 @@ export const parseOperatorCommand = (argv: readonly string[]): OperatorCommand =
     return {
       kind: "get-escalation-owner",
       threadId: readRequiredString(options, "thread-id"),
+      json
+    };
+  }
+
+  if (commandName === "fallback-list") {
+    const statusRaw = options.get("status");
+    if (statusRaw !== undefined && statusRaw !== "running" && statusRaw !== "all") {
+      throw new Error("Option --status must be running or all");
+    }
+    return {
+      kind: "fallback-list",
+      status: statusRaw ?? "running",
+      limit: readOptionalPositiveInt(options, "limit", 50),
+      json
+    };
+  }
+
+  if (commandName === "fallback-kill") {
+    const triggerId = readOptionalString(options, "trigger-id");
+    const threadId = readOptionalString(options, "thread-id");
+    if (triggerId === null && threadId === null) {
+      throw new Error("fallback-kill requires --trigger-id or --thread-id");
+    }
+    return {
+      kind: "fallback-kill",
+      triggerId,
+      threadId,
+      reason: readRequiredString(options, "reason"),
+      actorAgentId: readActorAgentId(options),
       json
     };
   }

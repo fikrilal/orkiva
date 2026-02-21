@@ -3,7 +3,11 @@ import type {
   UnreadReconciliationService
 } from "./unread-reconciliation.js";
 import type { ReconcileRuntimeResult, RuntimeRegistryService } from "./runtime-registry.js";
-import type { TriggerQueueProcessingResult, TriggerQueueStore } from "./trigger-queue.js";
+import type {
+  FallbackRunReconciliationResult,
+  TriggerQueueProcessingResult,
+  TriggerQueueStore
+} from "./trigger-queue.js";
 import type {
   ScheduleUnreadCandidatesResult,
   UnreadTriggerJobScheduler
@@ -14,6 +18,7 @@ export interface SupervisorWorkerLoopResult {
   unreadTriggerScheduling: ScheduleUnreadCandidatesResult;
   runtimeReconciliation: ReconcileRuntimeResult;
   triggerQueueProcessing: TriggerQueueProcessingResult;
+  fallbackRunReconciliation: FallbackRunReconciliationResult;
 }
 
 export interface SupervisorWorkerLoopInput {
@@ -35,6 +40,11 @@ export class SupervisorWorkerLoop {
     >,
     private readonly triggerQueueBacklogStore: Pick<TriggerQueueStore, "countPendingJobs">,
     private readonly triggerQueueProcessor: {
+      reconcileFallbackRuns: (input: {
+        workspaceId: string;
+        limit: number;
+        processedAt: Date;
+      }) => Promise<FallbackRunReconciliationResult>;
       processDueJobs: (input: {
         workspaceId: string;
         limit: number;
@@ -93,6 +103,11 @@ export class SupervisorWorkerLoop {
       staleAfterHours: input.staleAfterHours,
       reconciledAt: tickAt
     });
+    const fallbackRunReconciliation = await this.triggerQueueProcessor.reconcileFallbackRuns({
+      workspaceId: input.workspaceId,
+      limit: input.maxJobsPerTick,
+      processedAt: tickAt
+    });
     const triggerQueueProcessing = await this.triggerQueueProcessor.processDueJobs({
       workspaceId: input.workspaceId,
       limit: input.maxJobsPerTick,
@@ -103,7 +118,15 @@ export class SupervisorWorkerLoop {
       unreadReconciliation,
       unreadTriggerScheduling,
       runtimeReconciliation,
-      triggerQueueProcessing
+      triggerQueueProcessing: {
+        ...triggerQueueProcessing,
+        fallbackRunsScanned: fallbackRunReconciliation.scanned,
+        fallbackRunsQueuedForCompletion: fallbackRunReconciliation.queuedForCompletion,
+        fallbackRunsTimedOut: fallbackRunReconciliation.timedOut,
+        fallbackRunsKilled: fallbackRunReconciliation.killed,
+        fallbackRunsOrphaned: fallbackRunReconciliation.orphaned
+      },
+      fallbackRunReconciliation
     };
   }
 }

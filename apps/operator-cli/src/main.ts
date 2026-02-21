@@ -16,6 +16,8 @@ Usage:
   operator-cli reassign-escalation-owner --thread-id <id> --owner-agent-id <agent> --reason <text> [--actor-agent-id <agent>] [--json]
   operator-cli get-escalation-owner --thread-id <id> [--json]
   operator-cli override-close-thread --thread-id <id> --reason <human_override:...> [--actor-agent-id <agent>] [--json]
+  operator-cli fallback-list [--status running|all] [--limit <n>] [--json]
+  operator-cli fallback-kill (--trigger-id <id> | --thread-id <id>) --reason <text> [--actor-agent-id <agent>] [--json]
 `.trim();
   process.stdout.write(`${usage}\n`);
 };
