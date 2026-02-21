@@ -213,6 +213,7 @@ Local guardrails to avoid accidental queue replay and background fanout during i
 
 Launch sign-off artifact:
 - `docs/proposal/06-operations/launch_readiness_and_handoff.md`
+- `docs/proposal/06-operations/local_deployment_and_usage.md`
 
 ## 8. Post-Launch Review
 Within 2 weeks:
