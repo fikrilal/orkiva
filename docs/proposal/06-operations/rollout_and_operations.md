@@ -137,10 +137,21 @@ Default hybrid policy (MVP):
 - auto-unread minimum interval per thread/participant: 30s
 - auto-unread backlog breaker threshold (pending jobs): 50
 - auto-unread backlog breaker cooldown: 60s
+- auto-unread enabled: true (default, may be disabled in local-safe profile)
 - no-progress auto-block threshold: 20 turns
 - repeated-identical-finding auto-block threshold: 3 cycles
 - resume attempts before spawn: 2
 - stale session cutoff before spawn: `>12h` heartbeat gap
+- worker min claim cutoff timestamp: unset by default (local-safe profile sets startup timestamp)
+
+## 3.4 Local Development Guardrails
+Local guardrails to avoid accidental queue replay and background fanout during iterative testing:
+
+- `AUTO_UNREAD_ENABLED=false` disables unread reconciliation/scheduling while keeping manual trigger flows available.
+- `WORKER_MIN_JOB_CREATED_AT=<ISO timestamp>` limits job claiming to jobs created at or after startup.
+- `pnpm run dev:supervisor-worker:fresh` starts worker with startup cutoff set to current UTC.
+- `pnpm run dev:queue:reset -- --workspace-id <id>` inspects resettable pending jobs (`--apply` required to persist).
+- `pnpm run dev:stack:safe` starts `bridge-api` plus worker with `AUTO_UNREAD_ENABLED=false` and startup cutoff guard.
 
 ## 4. Testing Strategy
 ## 4.1 Unit Tests

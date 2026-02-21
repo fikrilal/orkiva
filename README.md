@@ -154,15 +154,24 @@ Or read the complete map:
 
 ## Development Environment (Current)
 
-This repo is commonly used from WSL on a Windows-mounted workspace (`/mnt/c/...`).
-Use wrappers to avoid Linux/Windows artifact drift:
+Local auth quickstart (recommended for native Ubuntu/Linux development):
 
-- `tool/agent/doctor`
-- `tool/agent/gitw --no-stdin ...`
-- `tool/agent/nodew --no-stdin ...`
-- `tool/agent/pnpmw --no-stdin ...`
-- `tool/agent/dockw --no-stdin ...`
-- `tool/agent/winrun --no-stdin -- <command> ...`
+1. Run `pnpm run dev:auth:bootstrap` once.
+2. This generates `.env.dev-auth` with:
+   - `AUTH_JWKS_JSON` (inline verifier keys, no JWKS server needed)
+   - `WORKER_BRIDGE_ACCESS_TOKEN`
+   - helper tokens (`DEV_ORCHESTRATOR_TOKEN`, `DEV_REVIEWER_TOKEN`, etc.)
+3. App scripts (`bridge-api`, `supervisor-worker`, `operator-cli`) auto-source `.env.dev-auth` when present.
+
+Safe local startup (prevents stale backlog replay/token bleed):
+
+1. Start both services in safe mode:
+   - `pnpm run dev:stack:safe`
+2. Or start worker only with fresh cutoff:
+   - `pnpm run dev:supervisor-worker:fresh`
+3. Optional queue cleanup by workspace:
+   - Dry run: `pnpm run dev:queue:reset -- --workspace-id wk_local`
+   - Apply: `pnpm run dev:queue:reset -- --workspace-id wk_local --apply`
 
 ## Engineering Quality Gates
 
